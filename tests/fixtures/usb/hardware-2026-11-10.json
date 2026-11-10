@@ -579,7 +579,7 @@
     ],
     "automatic_resubmissions": 0,
     "physical_result": "unknown",
-    "recovery": "power_off_confirmed_awaiting_power_on"
+    "recovery": "power_cycle_returned_to_idle_then_explicit_10mm_print_completed"
   },
   "power_off": {
     "user_confirmed": true,
@@ -594,5 +594,77 @@
     "job_id": "c59c55970ce9447f113a5f924de7d31d6e3fa2f789d5af29bced9f7d9b7e2c32",
     "attempt_id": "1794319348262943000-47838",
     "record_matches_cli": true
+  },
+  "power_cycle_recovery": {
+    "selector_kind": "same_serial",
+    "raw_status_after_power_on": [
+      22,
+      0,
+      0,
+      0,
+      0,
+      0,
+      5,
+      0,
+      5,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0
+    ],
+    "resolved_device_id": "usb:00:1",
+    "follow_up_print": {
+      "content_length_mm": 10,
+      "job_id": "c59c55970ce9447f113a5f924de7d31d6e3fa2f789d5af29bced9f7d9b7e2c32",
+      "attempt_id": "1794319492516685000-52645",
+      "state": "completed",
+      "exit_code": 0,
+      "completion_evidence": "usb_busy_then_idle",
+      "observed_st_transitions": [
+        2,
+        5,
+        0
+      ],
+      "final_raw_status": [
+        22,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        5,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "record_matches_cli": true,
+      "physical_observation": {
+        "source": "user",
+        "printed": true,
+        "auto_cut": true,
+        "interrupted_job_reprinted": false
+      }
+    }
   }
 }
