@@ -37,6 +37,123 @@ fn scan_duration(seconds: u64) -> Result<Duration> {
 fn usb_id(bus: &str, address: u8) -> String {
     format!("usb:{bus}:{address}")
 }
+#[derive(Clone, Copy)]
+struct UsbDescriptor<'a> {
+    bus: &'a str,
+    address: u8,
+    vendor: u16,
+    product: u16,
+    serial: Option<&'a str>,
+}
+
+impl<'a> From<&'a nusb::DeviceInfo> for UsbDescriptor<'a> {
+    fn from(info: &'a nusb::DeviceInfo) -> Self {
+        Self {
+            bus: info.bus_id(),
+            address: info.device_address(),
+            vendor: info.vendor_id(),
+            product: info.product_id(),
+            serial: info.serial_number(),
+        }
+    }
+}
+
+fn serial_selector(d: UsbDescriptor<'_>) -> Option<String> {
+    let serial = d.serial.filter(|s| !s.is_empty())?;
+    let hex: String = serial
+        .as_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    Some(format!(
+        "usb:serial:{:04x}:{:04x}:{hex}",
+        d.vendor, d.product
+    ))
+}
+
+fn resolve_usb_index(selector: &str, devices: &[UsbDescriptor<'_>]) -> Result<usize> {
+    let matches: Vec<usize> = if selector == "usb:sr-mk2" {
+        devices
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.vendor == 0x0d8a && d.product == 0x0103)
+            .map(|(i, _)| i)
+            .collect()
+    } else if let Some(rest) = selector.strip_prefix("usb:serial:") {
+        let parts: Vec<_> = rest.split(':').collect();
+        if parts.len() != 3
+            || parts[0].len() != 4
+            || parts[1].len() != 4
+            || parts[2].is_empty()
+            || parts[2].len() % 2 != 0
+            || !parts
+                .iter()
+                .all(|s| s.bytes().all(|b| b.is_ascii_hexdigit()))
+        {
+            return Err(AppError::invalid("Invalid USB serial selector"));
+        }
+        let vendor = u16::from_str_radix(parts[0], 16)
+            .map_err(|_| AppError::invalid("Invalid USB vendor ID"))?;
+        let product = u16::from_str_radix(parts[1], 16)
+            .map_err(|_| AppError::invalid("Invalid USB product ID"))?;
+        let bytes: Vec<u8> = parts[2]
+            .as_bytes()
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| {
+                let hex = std::str::from_utf8(pair).expect("ASCII hex was validated");
+                u8::from_str_radix(hex, 16).expect("ASCII hex was validated")
+            })
+            .collect();
+        let serial = std::str::from_utf8(&bytes)
+            .map_err(|_| AppError::invalid("USB serial is not UTF-8"))?;
+        devices
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| d.vendor == vendor && d.product == product && d.serial == Some(serial))
+            .map(|(i, _)| i)
+            .collect()
+    } else {
+        let rest = selector
+            .strip_prefix("usb:")
+            .ok_or_else(|| AppError::invalid("Invalid USB selector"))?;
+        let (bus, address) = rest
+            .rsplit_once(':')
+            .ok_or_else(|| AppError::invalid("Invalid USB selector"))?;
+        if bus.is_empty()
+            || address.is_empty()
+            || !address.bytes().all(|b| b.is_ascii_digit())
+            || address.parse::<u8>().is_err()
+        {
+            return Err(AppError::invalid("Invalid USB selector"));
+        }
+        devices
+            .iter()
+            .enumerate()
+            .filter(|(_, d)| usb_id(d.bus, d.address) == selector)
+            .map(|(i, _)| i)
+            .collect()
+    };
+    match matches.as_slice() {
+        [] => Err(not_found(selector)),
+        [index] => Ok(*index),
+        _ => Err(AppError::new(
+            "device_ambiguous",
+            format!("Multiple devices match: {selector}"),
+            3,
+        )),
+    }
+}
+
+/// Resolve an explicit USB selector without choosing arbitrarily among matches.
+pub fn resolve_usb_device(
+    selector: &str,
+    devices: &[nusb::DeviceInfo],
+) -> Result<nusb::DeviceInfo> {
+    let descriptors: Vec<_> = devices.iter().map(UsbDescriptor::from).collect();
+    Ok(devices[resolve_usb_index(selector, &descriptors)?].clone())
+}
 fn ble_id(adapter: usize, id: &str) -> String {
     format!("ble:{adapter}:{id}")
 }
@@ -47,12 +164,18 @@ fn candidate(name: Option<&str>) -> bool {
         n.contains("tepra") || n.contains("sr-mk2") || n.contains("king jim")
     })
 }
-fn usb_info(info: &nusb::DeviceInfo) -> Value {
+fn usb_info(info: &nusb::DeviceInfo, devices: &[UsbDescriptor<'_>]) -> Value {
     // Observed on a real SR-MK2, 2026-11-10. This identifies the model,
     // not the correctness of any unverified print protocol.
     let known_mk2 = info.vendor_id() == 0x0d8a && info.product_id() == 0x0103;
     let hint = candidate(info.product_string()) || candidate(info.manufacturer_string());
-    json!({"id": usb_id(info.bus_id(), info.device_address()), "transport":"usb", "bus_id":info.bus_id(), "device_address":info.device_address(), "vendor_id":info.vendor_id(), "product_id":info.product_id(), "class":info.class(), "subclass":info.subclass(), "protocol":info.protocol(), "manufacturer":info.manufacturer_string(), "product":info.product_string(), "serial_number":info.serial_number(), "candidate":known_mk2 || hint, "name_hint":hint, "model":if known_mk2 {"sr-mk2"} else {"unknown"}, "identification":if known_mk2 {"observed-usb-vid-pid"} else {"unverified"}, "direct_print_supported":known_mk2 && cfg!(any(target_os="macos", target_os="linux")), "requires_experimental_usb_flag":true})
+    let id = usb_id(info.bus_id(), info.device_address());
+    let serial = serial_selector(info.into());
+    let preferred = serial
+        .as_ref()
+        .filter(|s| resolve_usb_index(s, devices).is_ok())
+        .unwrap_or(&id);
+    json!({"id": id, "serial_selector":serial, "preferred_selector":preferred, "transport":"usb", "bus_id":info.bus_id(), "device_address":info.device_address(), "vendor_id":info.vendor_id(), "product_id":info.product_id(), "class":info.class(), "subclass":info.subclass(), "protocol":info.protocol(), "manufacturer":info.manufacturer_string(), "product":info.product_string(), "serial_number":info.serial_number(), "candidate":known_mk2 || hint, "name_hint":hint, "model":if known_mk2 {"sr-mk2"} else {"unknown"}, "identification":if known_mk2 {"observed-usb-vid-pid"} else {"unverified"}, "direct_print_supported":known_mk2 && cfg!(any(target_os="macos", target_os="linux")), "requires_experimental_usb_flag":true})
 }
 async fn usb_devices() -> Result<Vec<nusb::DeviceInfo>> {
     Ok(
@@ -62,18 +185,16 @@ async fn usb_devices() -> Result<Vec<nusb::DeviceInfo>> {
     )
 }
 async fn usb_doctor(id: &str) -> Result<Value> {
-    let info = usb_devices()
-        .await?
-        .into_iter()
-        .find(|d| usb_id(d.bus_id(), d.device_address()) == id)
-        .ok_or_else(|| not_found(id))?;
+    let devices = usb_devices().await?;
+    let info = resolve_usb_device(id, &devices)?;
+    let descriptors: Vec<_> = devices.iter().map(UsbDescriptor::from).collect();
     let device = bounded("USB open", info.open().into_future()).await?;
     let configurations: Vec<Value> = device.configurations().map(|c| json!({
         "configuration_value":c.configuration_value(),
         "interfaces": c.interface_alt_settings().map(|i| json!({"interface_number":i.interface_number(), "alternate_setting":i.alternate_setting(), "class":i.class(), "subclass":i.subclass(), "protocol":i.protocol(), "endpoints":i.endpoints().map(|e| json!({"address":e.address(), "transfer_type":format!("{:?}", e.transfer_type()), "max_packet_size":e.max_packet_size(), "interval":e.interval()})).collect::<Vec<_>>() })).collect::<Vec<_>>()
     })).collect();
     Ok(
-        json!({"device":usb_info(&info), "configurations":configurations, "active_configuration":device.active_configuration().ok().map(|c|c.configuration_value())}),
+        json!({"device":usb_info(&info, &descriptors), "configurations":configurations, "active_configuration":device.active_configuration().ok().map(|c|c.configuration_value())}),
     )
 }
 async fn ble_scan(seconds: u64) -> Result<Vec<(usize, Peripheral)>> {
@@ -161,7 +282,11 @@ async fn ble_doctor(id: &str, seconds: u64) -> Result<Value> {
 pub async fn devices(transport: &str, scan_seconds: u64) -> Result<Value> {
     match transport {
         "usb" => {
-            Ok(json!({"devices":usb_devices().await?.iter().map(usb_info).collect::<Vec<_>>() }))
+            let devices = usb_devices().await?;
+            let descriptors: Vec<_> = devices.iter().map(UsbDescriptor::from).collect();
+            Ok(
+                json!({"devices":devices.iter().map(|d| usb_info(d, &descriptors)).collect::<Vec<_>>() }),
+            )
         }
         "ble" => {
             let mut output = Vec::new();
@@ -187,6 +312,74 @@ pub async fn doctor(device_id: &str, scan_seconds: u64) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn descriptor(
+        bus: &'static str,
+        address: u8,
+        vendor: u16,
+        product: u16,
+        serial: Option<&'static str>,
+    ) -> UsbDescriptor<'static> {
+        UsbDescriptor {
+            bus,
+            address,
+            vendor,
+            product,
+            serial,
+        }
+    }
+    #[test]
+    fn usb_selectors_resolve_without_arbitrary_choice() {
+        let original = descriptor("bus:port", 7, 0x0d8a, 0x0103, Some("製造:1"));
+        let selector = serial_selector(original).unwrap();
+        let moved = descriptor("other", 9, 0x0d8a, 0x0103, Some("製造:1"));
+        assert_eq!(resolve_usb_index(&selector, &[moved]).unwrap(), 0);
+        assert_eq!(resolve_usb_index("usb:bus:port:7", &[original]).unwrap(), 0);
+        assert_eq!(
+            resolve_usb_index(&selector, &[original, moved])
+                .unwrap_err()
+                .code,
+            "device_ambiguous"
+        );
+        let other_model = descriptor("x", 1, 0x1234, 0x0103, Some("製造:1"));
+        assert_eq!(
+            resolve_usb_index(&selector, &[other_model, moved]).unwrap(),
+            1
+        );
+        assert_eq!(
+            resolve_usb_index("usb:sr-mk2", &[other_model, moved]).unwrap(),
+            1
+        );
+        assert_eq!(
+            resolve_usb_index("usb:sr-mk2", &[original, moved])
+                .unwrap_err()
+                .code,
+            "device_ambiguous"
+        );
+        assert_eq!(
+            resolve_usb_index(&selector, &[other_model])
+                .unwrap_err()
+                .code,
+            "device_not_found"
+        );
+        assert!(serial_selector(descriptor("x", 1, 1, 2, Some(""))).is_none());
+    }
+    #[test]
+    fn malformed_usb_selectors_are_invalid() {
+        for selector in [
+            "usb:serial:0d8a:0103:",
+            "usb:serial:0d8g:0103:61",
+            "usb:serial:0d8a:0103:6",
+            "usb:serial:0d8a:0103:ff",
+            "usb::1",
+            "usb:bus:256",
+        ] {
+            assert_eq!(
+                resolve_usb_index(selector, &[]).unwrap_err().exit_code,
+                2,
+                "{selector}"
+            );
+        }
+    }
     #[test]
     fn ids_preserve_os_identity() {
         assert_eq!(usb_id("bus:port", 7), "usb:bus:port:7");

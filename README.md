@@ -25,7 +25,11 @@ tepra doctor --device usb:00:1 --json
 tepra status --device usb:00:1 --json
 ```
 
-`usb:00:1`は今回の実機で返された例です。再接続等で変わるため、`devices`の`result.devices[].id`を使ってください。`doctor`は記述子を読み、`status`は本機から22バイトの状態応答を取得します。statusの生値をすべてのエラーやテープ種類へ変換する機能は未完成です。
+`usb:00:1`は今回の実機で返された例です。再接続等で変わるため、通常は`devices`の`result.devices[].preferred_selector`を使ってください。シリアル番号が取得でき、一意なら`usb:serial:<VID>:<PID>:<シリアルのUTF-8を16進符号化した値>`になります。同じVID/PID/シリアルの機器が複数あると選択を拒否します。シリアルがない場合、`preferred_selector`は従来のbus/address形式です。
+
+SR-MK2を1台だけ接続する運用では、`--device usb:sr-mk2`も使えます。対象VID/PIDの機器が0台または複数ならエラーになります。これは接続中の機種を選ぶ指定で、同じ物理個体を保証するものではありません。`doctor`・`status`・USBの`print`で同じ指定を使えます。
+
+`doctor`は記述子を読み、`status`は本機から22バイトの状態応答を取得します。`status.summary`に`activity`（idle/busy/waiting/unknown）、エラーの有無、観測済みカートリッジとの一致を表示します。`experimental_usb_preflight_matches`は試験的印刷の事前条件との一致であり、印刷成功の保証ではありません。未知のエラー原因やテープ品種は推測せず、生値を残します。`ready`と`printing_completed`は引き続き`null`です。
 
 エージェントの画像生成機能で作ったPNGを`label.png`として保存し、印刷用のプレビューとジョブへ変換します。
 
@@ -51,7 +55,11 @@ tepra print --job job.json --device usb:00:1 \
 
 ```sh
 cargo run --example calibration -- calibration.png
+# 1024行をまたぐ75mmの校正画像（既定は50mm）
+cargo run --example calibration -- calibration-75.png 75
 ```
+
+校正画像の指定長と`render --content-length-mm`は同じにしてください。横軸の目盛りは5mm間隔です。実寸・余白・異常系の確認方法は[USB実機検証](docs/usb-validation.md)にまとめています。
 
 ## 機能と検証範囲
 
@@ -94,7 +102,9 @@ tepra print --backend windows-webapi --device "KING JIM SR-MK2" --job job.json -
 
 USBは送信後の`ST=1/2`から`ST=0, ER=0`への変化、WebAPIは正常な`jobEnd`を完了の根拠にします。全バイト送信や進捗100%だけでは成功にしません。印字品質をセンサーで検査しているわけではありません。
 
-送信後のタイムアウト・切断・Ctrl-Cでは自動再送しません。ジョブIDは同じ内容を識別するための値で、再度`print`を明示すればもう1枚印刷します。exactly-onceを保証するものではありません。
+USBの送信前の中断は終了コード4、`state: "not_submitted"`になります。最初のUSB転送を投入した後のタイムアウト・切断・Ctrl-Cは終了コード7、`state: "unknown"`です。機器から明確なエラーを受けた場合は終了コード5ですが、送信後なら一部が印字されている可能性があります。送信後の失敗では自動再送しません。ジョブIDは同じ内容を識別するための値で、再度`print`を明示すればもう1枚印刷します。exactly-onceを保証するものではありません。
+
+失敗JSONと最終試行記録には同じ`job_id`・`attempt_id`・`device_id`を含めます。USBの`error.context.backend_context`には`phase`、`transmission_started`、直近の生ステータス、ST遷移、解決した`resolved_device_id`が残ります。これらは診断用で、シリアル番号自体をハードウェア認証するものではありません。
 
 同じユーザー・状態ディレクトリを使うCLIの印刷をファイルロックで直列化します。公式アプリの利用はこのロックの対象外なので、同時印刷は避けてください。試行記録はmacOS/Linuxで`$XDG_STATE_HOME/tepra-cli`または`~/.local/state/tepra-cli`、Windowsで`%LOCALAPPDATA%/tepra-cli`にJSONLとして残します。生画像は保存しません。異常終了時に最終結果が記録されていなければ、結果不明として扱います。
 

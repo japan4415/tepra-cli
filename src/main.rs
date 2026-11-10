@@ -107,7 +107,7 @@ enum Commands {
         /// Use the SR-MK2 USB prototype (observed 24mm cartridge, one copy, <=100mm).
         #[arg(long)]
         experimental_usb: bool,
-        /// Submission/completion deadline. Preflight requests have separate 5s limits.
+        /// USB: entire operation. WebAPI: submission/completion (preflight: 5s/request).
         #[arg(long, default_value_t=120, value_parser=clap::value_parser!(u64).range(1..=3600))]
         timeout_seconds: u64,
     },
@@ -242,14 +242,16 @@ async fn run(command: Commands) -> Result<Value> {
                 return Err(direct_unsupported());
             }
             let mut session = PrintSession::begin(&state_directory()?, &job_id, &device)?;
+            let usb_progress = tepra_cli::native_usb::PrintProgress::default();
             let print = async {
                 match backend {
                     Backend::Direct => {
-                        tepra_cli::native_usb::print(
+                        tepra_cli::native_usb::print_with_progress(
                             &device,
                             &validated.png_bytes,
                             &job_id,
                             Duration::from_secs(timeout_seconds),
+                            usb_progress.clone(),
                         )
                         .await
                     }
@@ -265,30 +267,78 @@ async fn run(command: Commands) -> Result<Value> {
                     }
                 }
             };
-            let result = tokio::select! {
-                result = print => result,
-                _ = tokio::signal::ctrl_c() => Err(AppError::unknown("Interrupted; printer may still be printing. Do not automatically retry.")),
-            };
-            let record = match &result {
-                Ok(v) => json!({"event":"result","ok":true,"result":v}),
-                Err(e) => json!({"event":"result","ok":false,"error":e}),
-            };
-            if let Err(e) = session.append(&record) {
-                return Err(AppError::unknown(format!("Print attempted but final record could not be persisted: {e}"))
-                            .with_context(json!({"job_id":job_id,"attempt_id":session.attempt_id,"record_path":session.record_path,"outcome":record})));
-            }
-            match result {
-                Ok(v) => Ok(
-                    json!({"state":"completed","job_id":job_id,"attempt_id":session.attempt_id,"record_path":session.record_path,"backend_result":v}),
-                ),
-                Err(mut e) => {
-                    e.context = Some(
-                        json!({"job_id":job_id,"attempt_id":session.attempt_id,"record_path":session.record_path,"backend_context":e.context}),
-                    );
-                    Err(e)
-                }
-            }
+            let result = await_print(print, tokio::signal::ctrl_c(), backend, &usb_progress).await;
+            finish_attempt(&mut session, &job_id, &device, result)
         }
+    }
+}
+
+async fn await_print(
+    print: impl std::future::Future<Output = Result<Value>>,
+    cancel: impl std::future::Future<Output = io::Result<()>>,
+    backend: Backend,
+    progress: &tepra_cli::native_usb::PrintProgress,
+) -> Result<Value> {
+    // Check an already-delivered interrupt before polling a future that can
+    // submit a USB transfer. If completion races cancellation, be conservative.
+    tokio::select! {
+        biased;
+        signal = cancel => {
+            let mut error = if matches!(backend, Backend::Direct) {
+                progress.interrupted()
+            } else {
+                AppError::unknown("Interrupted; printer may still be printing. Do not automatically retry.")
+            };
+            if let Err(signal_error) = signal {
+                error.message = format!("Interrupt handler failed: {signal_error}. {}", error.message);
+            }
+            Err(error)
+        },
+        result = print => result,
+    }
+}
+
+/// Persist exactly the outcome returned to the caller, including correlation IDs.
+fn finish_attempt(
+    session: &mut PrintSession,
+    job_id: &str,
+    device_id: &str,
+    result: Result<Value>,
+) -> Result<Value> {
+    let result = match result {
+        Ok(v) => Ok(
+            json!({"state":"completed","job_id":job_id,"device_id":device_id,
+            "attempt_id":session.attempt_id,"record_path":session.record_path,"backend_result":v}),
+        ),
+        Err(mut e) => {
+            let state = error_state(&e).to_owned();
+            e.context = Some(json!({"state":state,"job_id":job_id,"device_id":device_id,
+                "attempt_id":session.attempt_id,"record_path":session.record_path,"backend_context":e.context}));
+            Err(e)
+        }
+    };
+    let record = match &result {
+        Ok(v) => json!({"event":"result","ok":true,"state":"completed","result":v}),
+        Err(e) => json!({"event":"result","ok":false,"state":error_state(e),"error":e}),
+    };
+    if let Err(e) = session.append(&record) {
+        return Err(AppError::unknown(format!("Print attempted but final record could not be persisted: {e}"))
+            .with_context(json!({"job_id":job_id,"device_id":device_id,"attempt_id":session.attempt_id,"record_path":session.record_path,"outcome":record})));
+    }
+    result
+}
+
+fn error_state(error: &AppError) -> &'static str {
+    if error.exit_code == 7 {
+        "unknown"
+    } else if error
+        .context
+        .as_ref()
+        .is_some_and(|c| c["state"] == "not_submitted" || c["transmission_started"] == false)
+    {
+        "not_submitted"
+    } else {
+        "failed"
     }
 }
 
@@ -299,7 +349,7 @@ fn direct_unsupported() -> AppError {
 }
 fn output_error(error: &AppError, json_output: bool) {
     if json_output {
-        let value = json!({"schema_version":1,"ok":false,"state":if error.exit_code==7 {"unknown"} else {"failed"},"error":error});
+        let value = json!({"schema_version":1,"ok":false,"state":error_state(error),"error":error});
         if let Err(e) = output_value(&value, true) {
             eprintln!("output_failed: {e}");
         }
@@ -325,5 +375,86 @@ mod tests {
     #[test]
     fn command_graph_is_valid() {
         Cli::command().debug_assert();
+    }
+
+    #[tokio::test]
+    async fn ready_interrupt_prevents_polling_print_submission() {
+        let submitted = std::cell::Cell::new(false);
+        let print = async {
+            submitted.set(true);
+            Ok(json!({"state":"completed"}))
+        };
+        let progress = tepra_cli::native_usb::PrintProgress::default();
+        let error = await_print(
+            print,
+            std::future::ready(Ok(())),
+            Backend::Direct,
+            &progress,
+        )
+        .await
+        .unwrap_err();
+        assert!(!submitted.get());
+        assert_eq!(error.exit_code, 4);
+        assert_eq!(error_state(&error), "not_submitted");
+    }
+
+    #[tokio::test]
+    async fn interrupt_drops_pending_print_future() {
+        use std::cell::Cell;
+        use std::task::Poll;
+        struct Guard<'a>(&'a Cell<bool>);
+        impl Drop for Guard<'_> {
+            fn drop(&mut self) {
+                self.0.set(true);
+            }
+        }
+        let started = Cell::new(false);
+        let dropped = Cell::new(false);
+        let print = async {
+            let _guard = Guard(&dropped);
+            started.set(true);
+            std::future::pending::<Result<Value>>().await
+        };
+        let cancel = std::future::poll_fn(|cx| {
+            if started.get() {
+                Poll::Ready(Ok(()))
+            } else {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+        });
+        let progress = tepra_cli::native_usb::PrintProgress::default();
+        let error = await_print(print, cancel, Backend::Direct, &progress)
+            .await
+            .unwrap_err();
+        assert!(started.get());
+        assert!(dropped.get());
+        assert_eq!(error.exit_code, 4);
+    }
+
+    #[test]
+    fn final_record_preserves_returned_failure_and_correlation_ids() {
+        for (exit_code, transmitted, expected_state) in [
+            (4, false, "not_submitted"),
+            (7, true, "unknown"),
+            (5, true, "failed"),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut session = PrintSession::begin(dir.path(), "job", "usb:sr-mk2").unwrap();
+            let error = AppError::new("test_failure", "synthetic test error", exit_code)
+                .with_context(json!({"phase":"raster","transmission_started":transmitted,"raw_status":[22,0,1]}));
+            let error = finish_attempt(&mut session, "job", "usb:sr-mk2", Err(error)).unwrap_err();
+            assert_eq!(error_state(&error), expected_state);
+            let records = std::fs::read_to_string(&session.record_path).unwrap();
+            let last: Value = serde_json::from_str(records.lines().last().unwrap()).unwrap();
+            assert_eq!(last["error"], serde_json::to_value(&error).unwrap());
+            assert_eq!(last["state"], expected_state);
+            assert_eq!(last["error"]["context"]["job_id"], "job");
+            assert_eq!(last["error"]["context"]["attempt_id"], session.attempt_id);
+            assert_eq!(
+                last["error"]["context"]["backend_context"]["phase"],
+                "raster"
+            );
+        }
     }
 }
