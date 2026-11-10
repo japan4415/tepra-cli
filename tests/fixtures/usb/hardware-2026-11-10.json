@@ -309,7 +309,276 @@
         0,
         0
       ],
-      "physical_observation": "awaiting_user"
+      "physical_observation": {
+        "source": "user",
+        "orientation_correct": true,
+        "left_frame_visible": true,
+        "top_left_mark_visible": true,
+        "auto_cut": true,
+        "estimated_left_blank_margin_mm": [
+          1,
+          2
+        ],
+        "dimensions": "not_measured_with_ruler"
+      }
+    },
+    {
+      "commit": "19151f33f44bd30edcb317e20fbbccd479531fa3",
+      "content_length_mm": 75,
+      "raster_width": 1063,
+      "raster_height": 256,
+      "page_margin_dots": 14,
+      "source_head_order": "reversed_y",
+      "job_id": "6c68e66e1f73b1ab678e985e32a65b9e779eb24d1e840170f66a0722e4ed52e6",
+      "attempt_id": "1794317842308731000-31197",
+      "state": "completed",
+      "completion_evidence": "usb_busy_then_idle",
+      "observed_st_transitions": [
+        2,
+        5,
+        0
+      ],
+      "final_raw_status": [
+        22,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        5,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "physical_observation": {
+        "source": "user",
+        "reported": "追加4枚とも左端に約1mmの余白。印刷前に小片のカットを観測。"
+      }
+    },
+    {
+      "commit": "19151f33f44bd30edcb317e20fbbccd479531fa3",
+      "content_length_mm": 10,
+      "raster_width": 142,
+      "raster_height": 256,
+      "page_margin_dots": 14,
+      "source_head_order": "reversed_y",
+      "job_id": "c59c55970ce9447f113a5f924de7d31d6e3fa2f789d5af29bced9f7d9b7e2c32",
+      "attempt_id": "1794317871268495000-31719",
+      "state": "completed",
+      "completion_evidence": "usb_busy_then_idle",
+      "observed_st_transitions": [
+        2,
+        0
+      ],
+      "final_raw_status": [
+        22,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        5,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "physical_observation": {
+        "source": "user",
+        "reported": "追加4枚とも左端に約1mmの余白。印刷前に小片のカットを観測。"
+      }
+    },
+    {
+      "commit": "19151f33f44bd30edcb317e20fbbccd479531fa3",
+      "content_length_mm": 50,
+      "raster_width": 709,
+      "raster_height": 256,
+      "page_margin_dots": 14,
+      "source_head_order": "reversed_y",
+      "job_id": "c7ce6f146527237ec1792487ca70ed5e109f2039c30db03c79712164f232cbf9",
+      "attempt_id": "1794317881411932000-31853",
+      "state": "completed",
+      "completion_evidence": "usb_busy_then_idle",
+      "observed_st_transitions": [
+        2,
+        5,
+        0
+      ],
+      "final_raw_status": [
+        22,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        5,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "physical_observation": {
+        "source": "user",
+        "reported": "追加4枚とも左端に約1mmの余白。印刷前に小片のカットを観測。"
+      }
+    },
+    {
+      "commit": "19151f33f44bd30edcb317e20fbbccd479531fa3",
+      "content_length_mm": 100,
+      "raster_width": 1417,
+      "raster_height": 256,
+      "page_margin_dots": 14,
+      "source_head_order": "reversed_y",
+      "job_id": "135c8efb6febaca37d79ae1b163e94971b4a5df64c033ecdeed8241fe0527f86",
+      "attempt_id": "1794317894670063000-31858",
+      "state": "completed",
+      "completion_evidence": "usb_busy_then_idle",
+      "observed_st_transitions": [
+        2,
+        5,
+        0
+      ],
+      "final_raw_status": [
+        22,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        5,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "physical_observation": {
+        "source": "user",
+        "reported": "追加4枚とも左端に約1mmの余白。印刷前に小片のカットを観測。"
+      }
     }
-  ]
+  ],
+  "process_lock": {
+    "during": "corrected 75mm repeat",
+    "second_cli_exit_code": 4,
+    "error": {
+      "code": "printer_busy",
+      "message": "Another tepra process is printing, or the lock is unavailable: Resource temporarily unavailable (os error 35)",
+      "retryable": false
+    },
+    "second_job_submitted": false
+  },
+  "interruption": {
+    "signal": "SIGINT",
+    "signal_delay_seconds": 1,
+    "content_length_mm": 100,
+    "job_id": "135c8efb6febaca37d79ae1b163e94971b4a5df64c033ecdeed8241fe0527f86",
+    "attempt_id": "1794317960066286000-32356",
+    "exit_code": 7,
+    "state": "unknown",
+    "error_code": "print_result_unknown",
+    "retryable": false,
+    "phase": "raster",
+    "transmission_started": true,
+    "last_raw_status": [
+      22,
+      0,
+      0,
+      0,
+      0,
+      0,
+      5,
+      0,
+      5,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0
+    ],
+    "post_interrupt_poll_count": 77,
+    "post_interrupt_observed_st": [
+      2
+    ],
+    "observation_duration_seconds": 39.901,
+    "post_interrupt_last_raw_status": [
+      22,
+      2,
+      0,
+      0,
+      0,
+      0,
+      5,
+      0,
+      5,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0
+    ],
+    "automatic_resubmissions": 0,
+    "physical_result": "unknown",
+    "recovery": "awaiting_user_power_off"
+  }
 }
