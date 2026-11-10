@@ -108,7 +108,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-自動テストは実機へ送信しません。CIはmacOS・Linux・Windowsでビルド、lint、オフラインテストを実行します。
+自動テストは実機へ送信しません。CIはLinux（Ubuntu）のみでビルド、lint、オフラインテストを実行します。
 
 - [印刷仕様・公式API・既存実装の調査](docs/research.md)
 - [CLI設計](docs/design.md)
