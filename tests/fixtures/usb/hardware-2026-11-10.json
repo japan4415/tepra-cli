@@ -579,6 +579,20 @@
     ],
     "automatic_resubmissions": 0,
     "physical_result": "unknown",
-    "recovery": "awaiting_user_power_off"
+    "recovery": "power_off_confirmed_awaiting_power_on"
+  },
+  "power_off": {
+    "user_confirmed": true,
+    "usb_connected": true,
+    "listed_device_count": 0,
+    "status_exit_code": 3,
+    "print_exit_code": 3,
+    "error_code": "device_not_found",
+    "state": "not_submitted",
+    "phase": "preflight",
+    "transmission_started": false,
+    "job_id": "c59c55970ce9447f113a5f924de7d31d6e3fa2f789d5af29bced9f7d9b7e2c32",
+    "attempt_id": "1794319348262943000-47838",
+    "record_matches_cli": true
   }
 }

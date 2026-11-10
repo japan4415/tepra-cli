@@ -69,6 +69,8 @@ macOS 15.7.3（24G419）、CLI commit `1fa20a6`、USB接続のSR-MK2、装着24m
 
 100mmの別試行を開始し、約1秒後にプロセスへSIGINTを送った。CLIは`phase=raster`、`transmission_started=true`、終了コード7、`state=unknown`を返し、エラーと試行記録も一致した。自動再送は行わなかった。その後約40秒の状態取得ではST=2のままで、物理結果は確定できなかった。CLIの中断は本体のジョブ取消ではなく、残留データや部分印字を伴う可能性がある。この試行の電源OFF/ONによる復帰確認は継続中。
 
+ユーザーがUSBを接続したまま電源をOFFにした後、機器一覧は空になり、同じシリアル指定の`status`と10mmジョブの`print`は終了コード3・`device_not_found`となった。印刷は`phase=preflight`、`transmission_started=false`、`state=not_submitted`で停止し、最終試行記録とCLI出力が一致した。電源ON後の状態確認は未実施。
+
 ### カバー開・テープなし
 
 ユーザーが状態を作ってから`status`を採取し、同じ状態で10mmジョブの`print`を実行した。両方とも`phase=preflight`、`transmission_started=false`、終了コード5、`state=not_submitted`で停止した。最終試行記録とCLI出力も一致した。
