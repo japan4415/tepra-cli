@@ -237,5 +237,79 @@
       "job_id": "c59c55970ce9447f113a5f924de7d31d6e3fa2f789d5af29bced9f7d9b7e2c32",
       "attempt_id": "1794316622736022000-5671"
     }
+  ],
+  "reconnection": {
+    "user_confirmed_usb_replug": true,
+    "selector_kind": "same_serial",
+    "previous_resolved_device_id": "usb:00:1",
+    "resolved_device_id": "usb:00:1",
+    "raw_status": [
+      22,
+      0,
+      0,
+      0,
+      0,
+      0,
+      5,
+      0,
+      5,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0
+    ],
+    "note": "Selection by the same serial succeeded after replug. Bus/address happened to remain the same in this observation."
+  },
+  "corrected_prints": [
+    {
+      "commit": "19151f33f44bd30edcb317e20fbbccd479531fa3",
+      "content_length_mm": 75,
+      "raster_width": 1063,
+      "raster_height": 256,
+      "page_margin_dots": 14,
+      "source_head_order": "reversed_y",
+      "job_id": "6c68e66e1f73b1ab678e985e32a65b9e779eb24d1e840170f66a0722e4ed52e6",
+      "attempt_id": "1794317514240994000-26295",
+      "state": "completed",
+      "completion_evidence": "usb_busy_then_idle",
+      "observed_st_transitions": [
+        2,
+        0
+      ],
+      "final_raw_status": [
+        22,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        5,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "physical_observation": "awaiting_user"
+    }
   ]
 }

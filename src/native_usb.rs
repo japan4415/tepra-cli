@@ -962,7 +962,12 @@ mod tests {
             "../tests/fixtures/usb/hardware-2026-11-10.json"
         ))
         .unwrap();
-        for job in evidence["prints"].as_array().unwrap() {
+        for job in evidence["prints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .chain(evidence["corrected_prints"].as_array().unwrap())
+        {
             let final_status: Vec<u8> =
                 serde_json::from_value(job["final_raw_status"].clone()).unwrap();
             validate_preflight(&final_status, 5).unwrap();
