@@ -939,4 +939,30 @@ mod tests {
         data[1] = 0;
         assert!(state.observe(&data).unwrap());
     }
+
+    #[test]
+    fn observed_hardware_completion_sequences() {
+        let evidence: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/usb/hardware-2026-11-10.json"
+        ))
+        .unwrap();
+        for job in evidence["prints"].as_array().unwrap() {
+            let final_status: Vec<u8> =
+                serde_json::from_value(job["final_raw_status"].clone()).unwrap();
+            validate_preflight(&final_status, 5).unwrap();
+            let mut state = CompletionState::default();
+            let transitions = job["observed_st_transitions"].as_array().unwrap();
+            // Only ST transitions and the final full record were captured.
+            // Reconstruct input records for this state-machine regression;
+            // these are not presented as captured intermediate USB packets.
+            for (index, st) in transitions.iter().enumerate() {
+                let mut data = final_status.clone();
+                data[1] = st.as_u64().unwrap() as u8;
+                assert_eq!(
+                    state.observe(&data).unwrap(),
+                    index + 1 == transitions.len()
+                );
+            }
+        }
+    }
 }
