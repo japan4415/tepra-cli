@@ -38,7 +38,7 @@ tepra print --job job-75.json --device usb:sr-mk2 \
 
 ## 2026-11-10の追加実機試験
 
-macOS 15.7.3（24G419）、CLI commit `1fa20a6`、USB接続のSR-MK2、装着24mmテープで実行した。カートリッジ品番・本体firmware版は未確認。状態応答のraw `VER=1`は記録するが、firmwareの版番号と断定しない。
+macOS 15.7.3（24G419）、CLI commit `1fa20a6`、USB接続のSR-MK2、装着24mmテープで実行した。ユーザーはカートリッジ品番をSS24Kと確認した。本体firmware版は未確認。状態応答のraw `VER=1`は記録するが、firmwareの版番号と断定しない。
 
 シリアル番号を列挙で取得し、同じシリアル指定で`doctor`、`status`、4回の`print`に成功した。機器固有のシリアルは公開fixtureに含めない。解決後のアドレスは`usb:00:1`。USBケーブルの抜き差し後も同じ指定が使えるかは、まだ未確認。
 
@@ -53,7 +53,20 @@ macOS 15.7.3（24G419）、CLI commit `1fa20a6`、USB接続のSR-MK2、装着24m
 
 最終状態はいずれも通常時と同じ22バイトだった。ST=5を実機で観測し、その後idleへ戻るまで待機して正常終了できた。印刷結果・job/attempt ID・最後の生応答・ST遷移は[実機fixture](../tests/fixtures/usb/hardware-2026-11-10.json)に残した。途中の22バイト全体は採取していないため、回帰テストで再構成する中間レコードは合成値である。
 
-本節の`completed`は本体の状態応答による判定。4枚の印字・自動カット・向き・欠けの目視確認、外枠の寸法、前後余白、ラベル全長はユーザーへ確認中で、測定済みとは扱わない。追加試験での同一条件の反復、USB再接続、各異常系も未完了。
+本節の`completed`は本体の状態応答による判定。プレビューをユーザーが比較した結果、**印字はされたが上下反転、左上の黒印の欠落、左端の欠けが報告された**。したがって、この4回を正しい物理出力の成功例とは扱わない。自動カットの再確認は未完了。外枠の寸法、前後余白、ラベル全長の測定はユーザー指定で後日とする。
+
+上下反転は公式アプリのCoreGraphics変換と入力画素の順序の差を調査し、ラスタのヘッド方向を反転する修正を追加した。修正後の実機確認はまだ未実施。左端の欠けと余白パラメータの関係は調査中。再接続と同一条件の反復も未完了。
+
+### カバー開・テープなし
+
+ユーザーが状態を作ってから`status`を採取し、同じ状態で10mmジョブの`print`を実行した。両方とも`phase=preflight`、`transmission_started=false`、終了コード5、`state=not_submitted`で停止した。最終試行記録とCLI出力も一致した。
+
+| ユーザーが作った状態 | ER | EI2（生byte） | TW（生byte） | 追加した表示名 |
+| --- | --- | --- | --- | --- |
+| SS24Kを入れたままカバー開 | 33 | 128 | 255 | `cover_open` |
+| テープを取り出してカバー閉 | 6 | 0 | 0 | `no_tape_cartridge` |
+
+22バイトの全応答は同じ[実機fixture](../tests/fixtures/usb/hardware-2026-11-10.json)に保存した。公式SDKの`TepraPrintStatusError`にも`COVER_OPEN=0x21`、`NO_TAPE_CARTRIDGE=0x06`があり、公式アプリの日本語リソースも同じ番号のエラー文言を持つ。今回のSR-MK2実測との一致を根拠に、この2コードの表示名だけを追加した。他のERやEI2のビットの意味は推測しない。[公式SDK](https://www.kingjim.co.jp/resource-files/download/tepra/tc_api/tepra_creator_webapi_sdk.zip)
 
 ## 未実施の異常系
 

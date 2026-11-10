@@ -7,6 +7,18 @@ use serde_json::Value;
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 use serde_json::json;
 
+// Confirmed on SR-MK2 with user-created physical conditions, and matched to
+// the official SDK's public error enum. Do not infer other codes or bit flags.
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+pub(crate) fn error_name(code: u8) -> &'static str {
+    match code {
+        0 => "none_reported",
+        6 => "no_tape_cartridge",
+        33 => "cover_open",
+        _ => "unknown_device_error",
+    }
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn decode_status(data: &[u8]) -> Result<Value> {
     if data.len() != 22 || data[0] != 22 {
@@ -33,12 +45,12 @@ fn decode_status(data: &[u8]) -> Result<Value> {
         "ready":null,"tape_width_mm":if data[6]==5 {Some(24)} else {None},"printing_completed":null,
         "summary":{
             "activity":activity,
-            "error":if data[2]==0 {"none_reported"} else {"unknown_device_error"},
+            "error":error_name(data[2]),
             "error_code":data[2],
             "cartridge_profile":if observed_profile {"observed_24mm"} else {"unknown"},
             "experimental_usb_preflight_matches":data[1]==0 && data[2]==0 && observed_profile
         },
-        "interpretation":"ST=0 is idle, 1/2 busy, 3/4/5 waiting. TW=5 was observed with 24 mm tape. Nonzero ER reports an error whose physical cause is unknown. Profile matching is not a readiness or completion guarantee."}))
+        "interpretation":"ST=0 is idle, 1/2 busy, 3/4/5 waiting. TW=5 was observed with 24 mm tape. ER=6 (no tape) and ER=33 (cover open) were verified on SR-MK2. Other error causes remain unknown. Profile matching is not a readiness or completion guarantee."}))
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -180,6 +192,24 @@ mod tests {
                 status["summary"]["experimental_usb_preflight_matches"],
                 false
             );
+        }
+    }
+
+    #[test]
+    fn observed_hardware_errors_have_verified_names() {
+        let evidence: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/usb/hardware-2026-11-10.json"
+        ))
+        .unwrap();
+        for case in evidence["preflight_failures"].as_array().unwrap() {
+            let data: Vec<u8> = serde_json::from_value(case["raw_status"].clone()).unwrap();
+            let decoded = decode_status(&data).unwrap();
+            assert_eq!(decoded["summary"]["error"], case["condition"]);
+            assert_eq!(
+                decoded["summary"]["experimental_usb_preflight_matches"],
+                false
+            );
+            assert!(decoded["tape_width_mm"].is_null());
         }
     }
 }

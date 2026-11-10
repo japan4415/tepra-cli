@@ -6,7 +6,7 @@
   "transport": "usb",
   "tape_width_mm": 24,
   "selector_kind": "serial",
-  "note": "ST transitions and final status were observed directly. Full intermediate 22-byte status records were not captured. Physical output and dimensions await user confirmation. Serial number is omitted.",
+  "note": "ST transitions and final status were observed directly. Full intermediate 22-byte status records were not captured. Serial number is omitted. A completed protocol exchange does not imply correct physical output.",
   "prints": [
     {
       "content_length_mm": 10,
@@ -158,6 +158,84 @@
         0,
         0
       ]
+    }
+  ],
+  "tape_product": "SS24K",
+  "physical_observation": {
+    "source": "user",
+    "printed": true,
+    "reported_issue": "上下が反転している。左上の黒い四角が印刷されず、左端が切れている。",
+    "auto_cut": null,
+    "dimensions": "deferred_by_user"
+  },
+  "preflight_failures": [
+    {
+      "condition": "cover_open",
+      "raw_status": [
+        22,
+        0,
+        33,
+        0,
+        128,
+        0,
+        255,
+        0,
+        5,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "state": "not_submitted",
+      "error_code": "device_error",
+      "expected_exit_code": 5,
+      "transmission_started": false,
+      "phase": "preflight",
+      "job_id": "c59c55970ce9447f113a5f924de7d31d6e3fa2f789d5af29bced9f7d9b7e2c32",
+      "attempt_id": "1794316355638292000-96798"
+    },
+    {
+      "condition": "no_tape_cartridge",
+      "raw_status": [
+        22,
+        0,
+        6,
+        0,
+        0,
+        0,
+        0,
+        0,
+        40,
+        0,
+        49,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "state": "not_submitted",
+      "error_code": "device_error",
+      "expected_exit_code": 5,
+      "transmission_started": false,
+      "phase": "preflight",
+      "job_id": "c59c55970ce9447f113a5f924de7d31d6e3fa2f789d5af29bced9f7d9b7e2c32",
+      "attempt_id": "1794316622736022000-5671"
     }
   ]
 }

@@ -1,5 +1,17 @@
 # SR-MK2 USB プロトコル調査
 
+## 追加試験で判明した描画の不一致
+
+USB安定化PRの追加試験（2026-11-10、commit `1fa20a6`）では10/50/75/100mmの全ジョブで完了応答が得られたが、ユーザーのプレビュー比較で上下反転・左上黒印の欠落・左端の欠けが報告された。通信完了を、正しい向き・印字範囲の検証完了とは扱わない。詳しい状態と実測fixtureは[USB実機検証](usb-validation.md)を参照。
+
+公式アプリの`PrintController.imageWidth:`（`0x10037caff`）は`contentHeightForPage:`、`imageHeight:`（`0x10037cb18`）は`contentWidthForPage:`を返す。Dotbydot経路では元画像の横幅がL、縦幅がヘッド方向のラスタ幅になる。
+
+公式の変換`CGAffineTransform(a:0,b:-1,c:1,d:0,tx:0,ty:rowCount)`を、このMacのCoreGraphicsで8×4のDeviceGray合成画像に適用した。入力画素 `(x,y)=(1,1),(6,1),(1,2),(6,2)` は、幅4×高さ8の出力バッファの `(列,行)=(2,1),(2,6),(1,1),(1,6)` となった。入力xが送り行、入力yがヘッド位置`height-1-y`に対応する根拠であり、Rustの画素読み出しをこの順序へ修正した。修正の物理出力は再検証が必要。
+
+Dotbydotの`beginPage:`は入力画像を原点(0,0)・元サイズの矩形へ描画する。Tに渡す値は`min(画像幅, max(0, margin_mm × dpi / 25.4))`の整数切捨て。Lは入力画像の横幅のままで、T分の空白ラスタを前後へ追加する処理は、この経路の静的解析では見つからなかった。
+
+`TepraPrint.doPrint:printData:`（`0x10038201a`）、`doPrint:printDataArray:`（`0x10038212f`）、`doPrint:printParameter:printData:`（`0x10038216f`）は中央の`doPrint:printParameter:printDataArray:margin:`へ`margin=1`を渡す。この画像入力APIの省略時既定値は1mm、360dpiではT=14dotである。従来のT=141は別のFormDrawの標準10mm由来だったため、画像経路に合わせてT=14へ変更した。アプリ本体にはmarginを明示指定する呼び出しもあり、アプリUIのすべてのジョブが1mmという意味ではない。本体内部の印字原点や左端欠けとの関係は実機再検証が必要。
+
 ## 実装後の確認結果
 
 同日、このMacのSR-MK2とユーザーが24mmと確認した装着テープで、709×256dot（内容長指定50mm）の校正画像を送信した。最初の試行はCLIの状態判定が厳しすぎてcode 7となったが、ユーザーはラベルの印字と自動カットを確認した。ST=3/4/5を待機扱いに修正した後、別の明示的な試行でCLIは`state=completed`、終了コード0を返した。完了待ちで観測したST遷移は`[2, 0]`で、最終応答は下記の通常時の22 byteと同一だった。結果不明になったジョブをCLIが自動再送したわけではない。

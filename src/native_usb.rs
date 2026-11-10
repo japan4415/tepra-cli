@@ -7,9 +7,9 @@ use std::time::Duration;
 const MAX_LENGTH: u32 = 1417;
 const HEAD: u32 = 256;
 const EXPECTED_TAPE_CODE: Option<u8> = Some(5);
-// TEPRA LINK 2 default: truncate(360 * 10 / 25.4), in dots.
+// TEPRA LINK 2 image-data API default: truncate(360 * 1 / 25.4), in dots.
 // Physical leading/trailing feed is not implied by this parameter alone.
-const PAGE_MARGIN: Option<u16> = Some(141);
+const PAGE_MARGIN: Option<u16> = Some(14);
 
 /// Offline validation for the experimental USB profile; never opens a device.
 pub fn validate(png: &[u8]) -> Result<()> {
@@ -205,6 +205,8 @@ fn command(op: u8, data: &[u8]) -> Vec<u8> {
 }
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn header(width: u32, margin: u16) -> Vec<u8> {
+    // The image-data API clamps its margin to the source image width.
+    let margin = u32::from(margin).min(width) as u16;
     let mut out = Vec::new();
     for (op, data) in [
         (b'@', &[][..]),
@@ -228,7 +230,10 @@ fn rows(r: &Raster, start: u32, end: u32) -> Vec<u8> {
         for y in (0..HEAD).step_by(8) {
             let mut b = 0;
             for bit in 0..8 {
-                if r.pixels[((y + bit) * r.width + x) as usize] == 0 {
+                // Official Dotbydot/CoreGraphics transform maps source y to
+                // HEAD - 1 - y on the head. Keep previews in source orientation.
+                let source_y = HEAD - 1 - (y + bit);
+                if r.pixels[(source_y * r.width + x) as usize] == 0 {
                     b |= 0x80 >> bit;
                 }
             }
@@ -256,8 +261,9 @@ impl CompletionState {
             return Err(AppError::new(
                 "device_error",
                 format!(
-                    "Printer reported error {}; physical result may be partial",
-                    data[2]
+                    "Printer reported error {} ({}); physical result may be partial",
+                    data[2],
+                    crate::usb_status::error_name(data[2])
                 ),
                 5,
             ));
@@ -291,7 +297,11 @@ fn validate_preflight(data: &[u8], tape: u8) -> Result<()> {
     if data[2] != 0 {
         return Err(AppError::new(
             "device_error",
-            format!("Printer reported error {}", data[2]),
+            format!(
+                "Printer reported error {} ({})",
+                data[2],
+                crate::usb_status::error_name(data[2])
+            ),
             5,
         ));
     }
@@ -869,12 +879,18 @@ mod tests {
         assert_eq!(&bytes[..8], &[0x1b, 0x2e, 0, 0, 0, 1, 0, 1]);
         assert_eq!(bytes[8], 0x80);
         assert_eq!(bytes[39], 1);
-        assert_eq!(bytes[48], 1);
+        assert_eq!(bytes[48], 0);
+        assert_eq!(bytes[79], 0x80);
+        // Source row 7 is at head position 248 (byte 31, most significant bit),
+        // not at head position 7. This is the asymmetric orientation anchor.
+        assert_eq!(bytes[40..48], [0x1b, 0x2e, 0, 0, 0, 1, 0, 1]);
         assert_eq!(&header(1, 0)[..7], &[0x1b, 0x7b, 3, 0x40, 0x40, 0x7d, 0x1b]);
         assert_eq!(
             &header(1, 141)[16..26],
             &[0x1b, 0x7b, 7, b'C', 1, 1, 1, 1, 0x47, 0x7d]
         );
+        assert!(header(1, 14).ends_with(&[0x1b, 0x7b, 5, b'T', 1, 0, 0x55, 0x7d]));
+        assert!(header(709, 14).ends_with(&[0x1b, 0x7b, 5, b'T', 14, 0, 0x62, 0x7d]));
     }
     #[test]
     fn completion_requires_busy_and_reports_error() {
@@ -963,6 +979,24 @@ mod tests {
                     index + 1 == transitions.len()
                 );
             }
+        }
+    }
+
+    #[test]
+    fn observed_hardware_errors_fail_preflight() {
+        let evidence: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/usb/hardware-2026-11-10.json"
+        ))
+        .unwrap();
+        for case in evidence["preflight_failures"].as_array().unwrap() {
+            let data: Vec<u8> = serde_json::from_value(case["raw_status"].clone()).unwrap();
+            let error = validate_preflight(&data, 5).unwrap_err();
+            assert_eq!(
+                error.exit_code,
+                case["expected_exit_code"].as_i64().unwrap() as i32
+            );
+            assert_eq!(error.code, case["error_code"]);
+            assert!(error.message.contains(case["condition"].as_str().unwrap()));
         }
     }
 }
