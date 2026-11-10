@@ -82,10 +82,18 @@ macOS 15.7.3（24G419）、CLI commit `1fa20a6`、USB接続のSR-MK2、装着24m
 
 22バイトの全応答は同じ[実機fixture](../tests/fixtures/usb/hardware-2026-11-10.json)に保存した。公式SDKの`TepraPrintStatusError`にも`COVER_OPEN=0x21`、`NO_TAPE_CARTRIDGE=0x06`があり、公式アプリの日本語リソースも同じ番号のエラー文言を持つ。今回のSR-MK2実測との一致を根拠に、この2コードの表示名だけを追加した。他のERやEI2のビットの意味は推測しない。[公式SDK](https://www.kingjim.co.jp/resource-files/download/tepra/tc_api/tepra_creator_webapi_sdk.zip)
 
+### USB未接続と送信中の切断
+
+電源を入れたままUSBを外した状態では、機器一覧が空になり、同じシリアル指定の`status`と10mmジョブの`print`はいずれも終了コード3・`device_not_found`となった。印刷は`phase=preflight`、`transmission_started=false`、`state=not_submitted`で停止し、最終試行記録とCLI出力が一致した。
+
+再接続してST=0・ER=0を確認後、100mmを送信し、ユーザーが印刷開始後にUSBを抜いた。CLIは`phase=raster`、`transmission_started=true`、終了コード7・`print_result_unknown`・`state=unknown`で停止した。最終試行記録とCLI出力が一致し、自動再送は行わなかった。ユーザーは「途中まで出てカットされた」と確認した。
+
+電源を入れたままUSBを再接続すると、同じシリアルで取得した状態は最初ST=5、その後ST=0になった。両方ともER=0。ST=5からidleへの変化を元の100mmジョブの成功根拠にはせず、元の試行は`unknown`のまま記録する。その後、明示的に送った10mmはST `[2,5,0]`で`completed`となり、最終試行記録とCLI出力も一致した。
+
 ## 未実施の異常系
 
-未実施は対応外テープ、USB切断、他アプリ使用中の確認である。各条件を個別に作り、まず送信前のstatus/print結果と終了コードを記録する。カバー開、テープなし、電源OFFは前節のとおり確認済み。状態の作成・解除は本体の通常操作に従う。
+未実施は対応外テープ、他アプリ使用中の確認である。各条件を個別に作り、まず送信前のstatus/print結果と終了コードを記録する。カバー開、テープなし、電源OFF、USB未接続は前節のとおり確認済み。状態の作成・解除は本体の通常操作に従う。
 
-送信中のUSB切断と電源断は、CLIへのSIGINTとは別の試行として確認する。部分印字や残留ジョブがある可能性を記録し、復旧後に自動で再送されないこと、次の明示的なジョブの挙動を確認する。公式アプリとの競合も実測するまでは排他済みとしない。
+送信中の電源断は、CLIへのSIGINTやUSB切断とは別の試行として確認する。部分印字や残留ジョブがある可能性を記録し、復旧後に自動で再送されないこと、次の明示的なジョブの挙動を確認する。公式アプリとの競合も実測するまでは排他済みとしない。
 
 これらの実機結果が揃うまでP0全体を完了扱いにせず、試験的フラグも解除しない。GitHub ActionsはLinuxのみで、実機への送信は行わない。
