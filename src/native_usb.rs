@@ -747,6 +747,35 @@ mod tests {
             assert_eq!(err.context.unwrap()["phase"], "raster");
         }
     }
+
+    #[tokio::test]
+    async fn observed_power_button_error_stops_remaining_transfers() {
+        let evidence: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/usb/hardware-2026-11-11.json"
+        ))
+        .unwrap();
+        let case = &evidence["power_button_during_print"];
+        let raw: Vec<u8> = serde_json::from_value(case["raw_status"].clone()).unwrap();
+        // Inject the captured response after the first chunk. This is a mock
+        // control-flow regression, not a replay of every hardware transfer.
+        let mut mock = Mock {
+            statuses: VecDeque::from([Ok(raw.clone()), status(0, 0)]),
+            ..Default::default()
+        };
+        let progress = PrintProgress::default();
+        let error = run_mock(&mut mock, 1417, &progress, 200).await.unwrap_err();
+        assert_eq!(error.code, "device_error");
+        assert_eq!(error.exit_code, 5);
+        assert!(!error.retryable);
+        assert!(error.message.contains("power_off_cancel"));
+        let context = error.context.unwrap();
+        assert_eq!(context["phase"], "raster");
+        assert_eq!(context["transmission_started"], true);
+        assert_eq!(context["raw_status"], serde_json::json!(raw));
+        assert_eq!(mock.writes.len(), 2);
+        assert_eq!(mock.statuses.len(), 1);
+    }
+
     #[tokio::test]
     async fn expired_deadline_never_submits_and_pending_send_times_out() {
         let mut mock = Mock::default();

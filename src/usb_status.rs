@@ -15,6 +15,7 @@ pub(crate) fn error_name(code: u8) -> &'static str {
         0 => "none_reported",
         6 => "no_tape_cartridge",
         33 => "cover_open",
+        35 => "power_off_cancel",
         _ => "unknown_device_error",
     }
 }
@@ -50,7 +51,7 @@ fn decode_status(data: &[u8]) -> Result<Value> {
             "cartridge_profile":if observed_profile {"observed_24mm"} else {"unknown"},
             "experimental_usb_preflight_matches":data[1]==0 && data[2]==0 && observed_profile
         },
-        "interpretation":"ST=0 is idle, 1/2 busy, 3/4/5 waiting. TW=5 was observed with 24 mm tape. ER=6 (no tape) and ER=33 (cover open) were verified on SR-MK2. Other error causes remain unknown. Profile matching is not a readiness or completion guarantee."}))
+        "interpretation":"ST=0 is idle, 1/2 busy, 3/4/5 waiting. TW=5 was observed with 24 mm tape. ER=6 (no tape), ER=33 (cover open), and ER=35 (power-off button cancellation) were verified on SR-MK2. Other error causes remain unknown. Profile matching is not a readiness or completion guarantee."}))
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -211,5 +212,24 @@ mod tests {
             );
             assert!(decoded["tape_width_mm"].is_null());
         }
+    }
+
+    #[test]
+    fn observed_power_button_cancellation_is_not_ready_or_completed() {
+        let evidence: Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/usb/hardware-2026-11-11.json"
+        ))
+        .unwrap();
+        let case = &evidence["power_button_during_print"];
+        let data: Vec<u8> = serde_json::from_value(case["raw_status"].clone()).unwrap();
+        let decoded = decode_status(&data).unwrap();
+        assert_eq!(decoded["summary"]["error"], case["condition"]);
+        assert_eq!(decoded["summary"]["error_code"], 35);
+        assert_eq!(
+            decoded["summary"]["experimental_usb_preflight_matches"],
+            false
+        );
+        assert!(decoded["ready"].is_null());
+        assert!(decoded["printing_completed"].is_null());
     }
 }
