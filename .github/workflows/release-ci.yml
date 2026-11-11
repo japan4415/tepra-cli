@@ -1,0 +1,50 @@
+name: Release CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Release metadata and registry
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.13.7'
+          enable-cache: false
+      - name: Test archive and version validation
+        run: |
+          uv run --no-project --python 3.12 python -m unittest discover -s scripts -p 'test_*.py' -v
+          uv run --no-project --python 3.12 python scripts/release.py metadata
+      - name: Validate aqua registry against pinned upstream schema
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api 'repos/aquaproj/aqua/contents/json-schema/registry.json?ref=7d2a39b7b532a85067d86219d6da33f24dd55a9f' --jq .content | base64 --decode > "$RUNNER_TEMP/aqua-registry-schema.json"
+          uv run --no-project --python 3.12 --with PyYAML==6.0.3 --with jsonschema==4.25.1 python scripts/validate_registry.py "$RUNNER_TEMP/aqua-registry-schema.json"
+  archives:
+    uses: ./.github/workflows/build-release.yml
+  complete:
+    name: Release checks
+    if: always()
+    needs: [validate, archives]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    env:
+      VALIDATION_RESULT: ${{ needs.validate.result }}
+      ARCHIVE_RESULT: ${{ needs.archives.result }}
+    steps:
+      - run: test "$VALIDATION_RESULT" = success && test "$ARCHIVE_RESULT" = success

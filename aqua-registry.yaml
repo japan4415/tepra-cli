@@ -1,0 +1,38 @@
+---
+# yaml-language-server: $schema=https://raw.githubusercontent.com/aquaproj/aqua/v2.66.0/json-schema/registry.json
+packages:
+  - type: github_release
+    repo_owner: japan4415
+    repo_name: tepra-cli
+    description: Image preparation and printer diagnostics for KING JIM TEPRA SR-MK2
+    asset: tepra_{{trimV .Version}}_{{.OS}}_{{.Arch}}.tar.gz
+    format: tar.gz
+    supported_envs:
+      - darwin/amd64
+      - darwin/arm64
+      - linux/amd64
+      - linux/arm64
+      - windows/amd64
+    overrides:
+      - goos: windows
+        asset: tepra_{{trimV .Version}}_{{.OS}}_{{.Arch}}.zip
+        format: zip
+    files:
+      - name: tepra
+    checksum:
+      enabled: true
+      type: github_release
+      asset: SHA256SUMS
+      algorithm: sha256
+      file_format: regexp
+      pattern:
+        checksum: '^([A-Fa-f0-9]{64})'
+        file: '^[A-Fa-f0-9]{64}\s+(\S+)$'
+      github_artifact_attestations:
+        enabled: true
+        signer_workflow: japan4415/tepra-cli/.github/workflows/release.yml
+        deny_self_hosted_runners: true
+    github_artifact_attestations:
+      enabled: true
+      signer_workflow: japan4415/tepra-cli/.github/workflows/release.yml
+      deny_self_hosted_runners: true
