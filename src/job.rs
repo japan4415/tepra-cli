@@ -142,7 +142,7 @@ pub fn load_job(path: &Path) -> Result<ValidatedJob> {
     {
         return Err(AppError::unsupported("unsupported job model or profile"));
     }
-    let width = render::width_for_length(job.content_length_mm)?;
+    let width = render::width_with_padding(&job.options)?;
     if job.content_length_mm != job.options.content_length_mm
         || job.raster.width != width
         || job.raster.height != HEAD_DOTS

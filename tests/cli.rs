@@ -36,6 +36,8 @@ fn render_and_dry_run_are_offline_and_detect_tampering() {
         input.to_str().unwrap(),
         "--content-length-mm",
         "50",
+        "--padding-right-mm",
+        "1",
         "--output",
         preview.to_str().unwrap(),
         "--job",
@@ -47,7 +49,11 @@ fn render_and_dry_run_are_offline_and_detect_tampering() {
         "{}",
         String::from_utf8_lossy(&rendered.stderr)
     );
-    assert_eq!(json(&rendered)["result"]["job"]["raster"]["width"], 709);
+    assert_eq!(json(&rendered)["result"]["job"]["raster"]["width"], 723);
+    assert_eq!(
+        json(&rendered)["result"]["job"]["options"]["padding_right_mm"],
+        1.0
+    );
     let args = [
         "print",
         "--job",
@@ -55,11 +61,14 @@ fn render_and_dry_run_are_offline_and_detect_tampering() {
         "--device",
         "usb:does-not-exist:99",
         "--dry-run",
+        "--copies",
+        "2",
         "--json",
     ];
     let validated = cli(&args);
     assert!(validated.status.success());
     assert_eq!(json(&validated)["result"]["connected"], false);
+    assert_eq!(json(&validated)["result"]["copies_requested"], 2);
     assert_eq!(json(&validated)["result"]["print_supported"], false);
     let disabled = cli(&[
         "print",
@@ -90,6 +99,45 @@ fn render_and_dry_run_are_offline_and_detect_tampering() {
 }
 
 #[test]
+fn invalid_or_unsupported_copy_counts_fail_before_reading_job() {
+    for copies in ["0", "21", "4294967295"] {
+        let output = cli(&[
+            "print",
+            "--job",
+            "missing.json",
+            "--device",
+            "usb:missing",
+            "--copies",
+            copies,
+            "--experimental-usb",
+            "--dry-run",
+            "--json",
+        ]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            json(&output)["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("copies")
+        );
+    }
+    let output = cli(&[
+        "print",
+        "--job",
+        "missing.json",
+        "--device",
+        "printer",
+        "--copies",
+        "2",
+        "--backend",
+        "windows-webapi",
+        "--dry-run",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(6));
+}
+
+#[test]
 fn experimental_dry_run_enforces_native_size_limit_without_connecting() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("in.png");
@@ -103,7 +151,9 @@ fn experimental_dry_run_enforces_native_size_limit_without_connecting() {
             "render",
             input.to_str().unwrap(),
             "--content-length-mm",
-            "101",
+            "100",
+            "--padding-right-mm",
+            "1",
             "--output",
             preview.to_str().unwrap(),
             "--job",

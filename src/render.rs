@@ -31,9 +31,14 @@ pub enum Dither {
 #[serde(deny_unknown_fields)]
 pub struct RenderOptions {
     pub content_length_mm: f64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub padding_right_mm: f64,
     pub fit: Fit,
     pub dither: Dither,
     pub threshold: u8,
+}
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 #[derive(Debug)]
 pub struct Rendered {
@@ -58,7 +63,22 @@ pub fn width_for_length(mm: f64) -> Result<u32> {
     }
     Ok(dots as u32)
 }
+pub fn width_with_padding(options: &RenderOptions) -> Result<u32> {
+    let content_width = width_for_length(options.content_length_mm)?;
+    if !options.padding_right_mm.is_finite() || options.padding_right_mm < 0.0 {
+        return Err(AppError::invalid(
+            "right padding must be finite and non-negative",
+        ));
+    }
+    if options.content_length_mm + options.padding_right_mm > 1000.0 {
+        return Err(AppError::invalid(
+            "content length plus right padding must be at most 1000 mm",
+        ));
+    }
+    Ok(content_width + (options.padding_right_mm * f64::from(DPI) / 25.4).round() as u32)
+}
 pub fn render(input: &Path, options: &RenderOptions) -> Result<Rendered> {
+    let output_width = width_with_padding(options)?;
     let width = width_for_length(options.content_length_mm)?;
     let file = fs::File::open(input)
         .map_err(|e| AppError::invalid(format!("cannot read input PNG: {e}")))?;
@@ -80,7 +100,7 @@ pub fn render(input: &Path, options: &RenderOptions) -> Result<Rendered> {
     if iw == 0 || ih == 0 || pixels > MAX_PIXELS {
         return Err(AppError::invalid("PNG dimensions exceed limit"));
     }
-    let out_pixels = u64::from(width) * u64::from(HEAD_DOTS);
+    let out_pixels = u64::from(output_width) * u64::from(HEAD_DOTS);
     let scale = match options.fit {
         Fit::Contain => {
             (f64::from(width) / f64::from(iw)).min(f64::from(HEAD_DOTS) / f64::from(ih))
@@ -161,7 +181,7 @@ pub fn render(input: &Path, options: &RenderOptions) -> Result<Rendered> {
         .pixels()
         .map(|p| 0.2126 * f32::from(p[0]) + 0.7152 * f32::from(p[1]) + 0.0722 * f32::from(p[2]))
         .collect();
-    let mut mono = vec![255u8; out_pixels as usize];
+    let mut mono = vec![255u8; (width * HEAD_DOTS) as usize];
     let w = width as usize;
     for y in 0..HEAD_DOTS as usize {
         for x in 0..w {
@@ -190,9 +210,21 @@ pub fn render(input: &Path, options: &RenderOptions) -> Result<Rendered> {
             }
         }
     }
+    // Append after dithering so neither resampling nor error diffusion changes
+    // the original artwork or introduces black pixels into the white padding.
+    if output_width != width {
+        let mut padded = vec![255u8; out_pixels as usize];
+        for (source, target) in mono
+            .chunks_exact(w)
+            .zip(padded.chunks_exact_mut(output_width as usize))
+        {
+            target[..w].copy_from_slice(source);
+        }
+        mono = padded;
+    }
     let mut png_bytes = Vec::new();
     {
-        let mut encoder = png::Encoder::new(&mut png_bytes, width, HEAD_DOTS);
+        let mut encoder = png::Encoder::new(&mut png_bytes, output_width, HEAD_DOTS);
         encoder.set_color(png::ColorType::Grayscale);
         encoder.set_depth(png::BitDepth::Eight);
         encoder.set_pixel_dims(Some(png::PixelDimensions {
@@ -209,7 +241,7 @@ pub fn render(input: &Path, options: &RenderOptions) -> Result<Rendered> {
     }
     Ok(Rendered {
         png_bytes,
-        width,
+        width: output_width,
         height: HEAD_DOTS,
         source_sha256: sha256(&data),
         options: options.clone(),

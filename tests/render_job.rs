@@ -7,6 +7,7 @@ use tepra_cli::{
 fn options() -> RenderOptions {
     RenderOptions {
         content_length_mm: 50.0,
+        padding_right_mm: 0.0,
         fit: Fit::Contain,
         dither: Dither::Threshold,
         threshold: 128,
@@ -15,6 +16,73 @@ fn options() -> RenderOptions {
 fn pixels(bytes: &[u8]) -> image::GrayImage {
     image::load_from_memory(bytes).unwrap().to_luma8()
 }
+#[test]
+fn right_padding_preserves_artwork_and_stays_white_for_all_render_modes() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in.png");
+    let source = RgbaImage::from_fn(37, 13, |x, y| {
+        let v = ((x * 7 + y * 11) % 256) as u8;
+        Rgba([v, v, v, 255])
+    });
+    source.save(&input).unwrap();
+    for fit in [Fit::Contain, Fit::Cover] {
+        for dither in [Dither::Threshold, Dither::FloydSteinberg] {
+            let mut opts = options();
+            opts.fit = fit;
+            opts.dither = dither;
+            let original = pixels(&render(&input, &opts).unwrap().png_bytes);
+            opts.padding_right_mm = 1.0;
+            let padded = pixels(&render(&input, &opts).unwrap().png_bytes);
+            assert_eq!(padded.dimensions(), (723, 256));
+            for (x, y, pixel) in original.enumerate_pixels() {
+                assert_eq!(padded.get_pixel(x, y), pixel);
+            }
+            assert!(
+                padded
+                    .enumerate_pixels()
+                    .filter(|(x, _, _)| *x >= 709)
+                    .all(|(_, _, p)| p[0] == 255)
+            );
+        }
+    }
+}
+
+#[test]
+fn padding_validation_and_job_compatibility() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in.png");
+    RgbaImage::from_pixel(2, 2, Rgba([0, 0, 0, 255]))
+        .save(&input)
+        .unwrap();
+    let mut opts = options();
+    for value in [-1.0, f64::NAN, f64::INFINITY, 951.0] {
+        opts.padding_right_mm = value;
+        assert!(render(&input, &opts).is_err());
+    }
+    for padding in [0.0, 0.001, 1.0, 950.0] {
+        opts.padding_right_mm = padding;
+        let rendered = render(&input, &opts).unwrap();
+        let raster = dir.path().join(format!("raster-{padding}.png"));
+        let job = dir.path().join(format!("job-{padding}.json"));
+        write_job(&rendered, &raster, &job).unwrap();
+        let mut doc: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&job).unwrap()).unwrap();
+        if padding == 0.0 {
+            // Old schema-1 jobs have no padding field; serialization also stays unchanged.
+            assert!(doc["options"].get("padding_right_mm").is_none());
+        }
+        let loaded = load_job(&job).unwrap();
+        assert_eq!(loaded.job.options.padding_right_mm, padding);
+        assert_eq!(loaded.png_bytes, rendered.png_bytes);
+        doc["options"]["padding_right_mm"] = 2.0.into();
+        std::fs::write(&job, serde_json::to_vec(&doc).unwrap()).unwrap();
+        assert!(load_job(&job).is_err());
+        doc["options"]["padding_right_mm"] = (-1.0).into();
+        std::fs::write(&job, serde_json::to_vec(&doc).unwrap()).unwrap();
+        assert!(load_job(&job).is_err());
+    }
+}
+
 #[test]
 fn dimensions_alpha_fit_and_resolution() {
     let dir = tempfile::tempdir().unwrap();

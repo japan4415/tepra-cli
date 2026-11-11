@@ -10,6 +10,21 @@ const EXPECTED_TAPE_CODE: Option<u8> = Some(5);
 // TEPRA LINK 2 image-data API default: truncate(360 * 1 / 25.4), in dots.
 // Physical leading/trailing feed is not implied by this parameter alone.
 const PAGE_MARGIN: Option<u16> = Some(14);
+pub const MAX_COPIES: u32 = 20;
+
+pub fn validate_copies(copies: u32) -> Result<()> {
+    if !(1..=MAX_COPIES).contains(&copies) {
+        return Err(AppError::invalid("USB copies must be between 1 and 20"));
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+struct PrintSettings {
+    margin: u16,
+    copies: u32,
+}
 
 /// Offline validation for the experimental USB profile; never opens a device.
 pub fn validate(png: &[u8]) -> Result<()> {
@@ -23,6 +38,9 @@ struct Diagnostics {
     raw_status: Option<Vec<u8>>,
     transitions: Vec<u8>,
     transitions_truncated: bool,
+    copies_requested: Option<u32>,
+    current_copy: Option<u32>,
+    copies_submitted: u32,
     #[cfg(any(target_os = "macos", target_os = "linux", test))]
     last_st: Option<u8>,
 }
@@ -35,6 +53,9 @@ impl Default for Diagnostics {
             raw_status: None,
             transitions: Vec::new(),
             transitions_truncated: false,
+            copies_requested: None,
+            current_copy: None,
+            copies_submitted: 0,
             #[cfg(any(target_os = "macos", target_os = "linux", test))]
             last_st: None,
         }
@@ -59,7 +80,7 @@ impl Diagnostics {
         error.with_context(self.snapshot())
     }
     fn snapshot(&self) -> Value {
-        serde_json::json!({"phase":self.phase,"transmission_started":self.transmission_started,"resolved_device_id":self.resolved_device_id,"raw_status":self.raw_status,"observed_st_transitions":self.transitions,"observed_st_transitions_truncated":self.transitions_truncated})
+        serde_json::json!({"phase":self.phase,"transmission_started":self.transmission_started,"resolved_device_id":self.resolved_device_id,"raw_status":self.raw_status,"observed_st_transitions":self.transitions,"observed_st_transitions_truncated":self.transitions_truncated,"copies_requested":self.copies_requested,"current_copy":self.current_copy,"copies_submitted":self.copies_submitted})
     }
 }
 
@@ -205,8 +226,6 @@ fn command(op: u8, data: &[u8]) -> Vec<u8> {
 }
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn header(width: u32, margin: u16) -> Vec<u8> {
-    // The image-data API clamps its margin to the source image width.
-    let margin = u32::from(margin).min(width) as u16;
     let mut out = Vec::new();
     for (op, data) in [
         (b'@', &[][..]),
@@ -218,7 +237,14 @@ fn header(width: u32, margin: u16) -> Vec<u8> {
     ] {
         out.extend(command(op, data));
     }
-    out.extend(command(b'L', &width.to_le_bytes()));
+    out.extend(page_header(width, margin));
+    out
+}
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+fn page_header(width: u32, margin: u16) -> Vec<u8> {
+    // The image-data API clamps its margin to the source image width.
+    let margin = u32::from(margin).min(width) as u16;
+    let mut out = command(b'L', &width.to_le_bytes());
     out.extend(command(b'T', &margin.to_le_bytes()));
     out
 }
@@ -337,6 +363,19 @@ pub async fn print_with_progress(
     timeout: Duration,
     progress: PrintProgress,
 ) -> Result<Value> {
+    print_copies_with_progress(device_id, png, job_id, timeout, 1, progress).await
+}
+
+pub async fn print_copies_with_progress(
+    device_id: &str,
+    png: &[u8],
+    job_id: &str,
+    timeout: Duration,
+    copies: u32,
+    progress: PrintProgress,
+) -> Result<Value> {
+    progress.access(|d| d.copies_requested = Some(copies));
+    validate_copies(copies).map_err(|e| progress.attach(e))?;
     let raster = decode(png).map_err(|e| progress.attach(e))?;
     let (Some(tape), Some(margin)) = (EXPECTED_TAPE_CODE, PAGE_MARGIN) else {
         return Err(progress.attach(AppError::unsupported(
@@ -345,11 +384,20 @@ pub async fn print_with_progress(
     };
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
-        usb_print(device_id, &raster, job_id, timeout, tape, margin, progress).await
+        usb_print(
+            device_id,
+            &raster,
+            job_id,
+            timeout,
+            tape,
+            PrintSettings { margin, copies },
+            progress,
+        )
+        .await
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        let _ = (device_id, raster, job_id, timeout, tape, margin);
+        let _ = (device_id, raster, job_id, timeout, tape, margin, copies);
         Err(progress.attach(AppError::unsupported(
             "USB printing is supported on macOS/Linux only",
         )))
@@ -363,7 +411,7 @@ async fn usb_print(
     job_id: &str,
     timeout: Duration,
     tape: u8,
-    margin: u16,
+    settings: PrintSettings,
     progress: PrintProgress,
 ) -> Result<Value> {
     use nusb::{
@@ -453,7 +501,7 @@ async fn usb_print(
         raster,
         job_id,
         device_id,
-        margin,
+        settings,
         &progress,
         deadline,
     )
@@ -487,14 +535,16 @@ async fn execute_job<T: Transport>(
     raster: &Raster,
     job_id: &str,
     device_id: &str,
-    margin: u16,
+    settings: PrintSettings,
     progress: &PrintProgress,
     deadline: tokio::time::Instant,
 ) -> Result<Value> {
+    progress.access(|d| d.copies_requested = Some(settings.copies));
+    validate_copies(settings.copies).map_err(|e| progress.attach(e))?;
     let outcome = tokio::time::timeout_at(
         deadline,
         run_job(
-            transport, raster, job_id, device_id, margin, progress, deadline,
+            transport, raster, job_id, device_id, settings, progress, deadline,
         ),
     )
     .await;
@@ -554,32 +604,50 @@ async fn run_job<T: Transport>(
     raster: &Raster,
     job_id: &str,
     device_id: &str,
-    margin: u16,
+    settings: PrintSettings,
     progress: &PrintProgress,
     deadline: tokio::time::Instant,
 ) -> Result<Value> {
+    progress.access(|d| d.current_copy = Some(1));
     progress.phase("header");
     transport
-        .send(header(raster.width, margin), progress, deadline)
+        .send(header(raster.width, settings.margin), progress, deadline)
         .await?;
-    for start in (0..raster.width).step_by(1024) {
-        progress.phase("raster");
-        transport
-            .send(
-                rows(raster, start, (start + 1024).min(raster.width)),
-                progress,
-                deadline,
-            )
-            .await?;
-        let data = transport.status().await?;
-        progress.record(&data);
-        if tokio::time::Instant::now() >= deadline {
-            return Err(progress.timeout_error());
+    // One job environment and final reset for the entire batch. Between copies,
+    // repeat only the page environment, raster, and form feed (official app flow).
+    for copy in 1..=settings.copies {
+        progress.access(|d| d.current_copy = Some(copy));
+        if copy > 1 {
+            progress.phase("page_header");
+            transport
+                .send(
+                    page_header(raster.width, settings.margin),
+                    progress,
+                    deadline,
+                )
+                .await?;
         }
-        CompletionState::default().observe(&data)?;
+        for start in (0..raster.width).step_by(1024) {
+            progress.phase("raster");
+            transport
+                .send(
+                    rows(raster, start, (start + 1024).min(raster.width)),
+                    progress,
+                    deadline,
+                )
+                .await?;
+            let data = transport.status().await?;
+            progress.record(&data);
+            if tokio::time::Instant::now() >= deadline {
+                return Err(progress.timeout_error());
+            }
+            CompletionState::default().observe(&data)?;
+        }
+        progress.phase("form_feed");
+        transport.send(vec![0x0c], progress, deadline).await?;
+        // Submission is not proof that this copy has physically printed/cut.
+        progress.access(|d| d.copies_submitted = copy);
     }
-    progress.phase("form_feed");
-    transport.send(vec![0x0c], progress, deadline).await?;
     progress.phase("final_reset");
     transport
         .send(command(b'@', &[]), progress, deadline)
@@ -598,7 +666,7 @@ async fn run_job<T: Transport>(
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     Ok(
-        serde_json::json!({"job_id":job_id, "device_id":device_id, "resolved_device_id":progress.snapshot()["resolved_device_id"], "state":"completed", "completion_evidence":"usb_busy_then_idle", "final_status":{"raw_bytes": final_status}, "observed_st_transitions":state.transitions, "observed_st_transitions_truncated":state.transitions_truncated}),
+        serde_json::json!({"job_id":job_id, "device_id":device_id, "resolved_device_id":progress.snapshot()["resolved_device_id"], "state":"completed", "copies_requested":settings.copies,"copies_submitted":settings.copies, "completion_evidence":"usb_busy_then_idle", "final_status":{"raw_bytes": final_status}, "observed_st_transitions":state.transitions, "observed_st_transitions_truncated":state.transitions_truncated}),
     )
 }
 
@@ -661,7 +729,10 @@ mod tests {
             &test_raster(width),
             "job",
             "usb:test",
-            141,
+            PrintSettings {
+                margin: 141,
+                copies: 1,
+            },
             progress,
             tokio::time::Instant::now() + Duration::from_millis(ms),
         )
@@ -696,6 +767,171 @@ mod tests {
             progress.snapshot()["observed_st_transitions"],
             serde_json::json!([0, 1, 0, 3, 2, 0])
         );
+    }
+    #[tokio::test]
+    async fn batch_uses_one_environment_and_final_reset_but_separate_pages() {
+        let mut mock = Mock {
+            statuses: VecDeque::from([
+                status(2, 0),
+                status(2, 0),
+                status(2, 0),
+                status(2, 0),
+                status(2, 0),
+                status(0, 0),
+            ]),
+            ..Default::default()
+        };
+        let progress = PrintProgress::default();
+        let raster = test_raster(1025);
+        let output = execute_job(
+            &mut mock,
+            &raster,
+            "job",
+            "usb:test",
+            PrintSettings {
+                margin: 14,
+                copies: 2,
+            },
+            &progress,
+            tokio::time::Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            mock.writes,
+            vec![
+                header(1025, 14),
+                rows(&raster, 0, 1024),
+                rows(&raster, 1024, 1025),
+                vec![0x0c],
+                page_header(1025, 14),
+                rows(&raster, 0, 1024),
+                rows(&raster, 1024, 1025),
+                vec![0x0c],
+                command(b'@', &[]),
+            ]
+        );
+        assert_eq!(output["state"], "completed");
+        assert_eq!(output["copies_requested"], 2);
+        assert_eq!(output["copies_submitted"], 2);
+        assert_eq!(progress.snapshot()["current_copy"], 2);
+        assert_eq!(progress.snapshot()["copies_submitted"], 2);
+    }
+
+    #[tokio::test]
+    async fn batch_failure_stops_without_reset_or_repeating_previous_copy() {
+        for failure in 4..=7 {
+            let mut mock = Mock {
+                fail_send_at: Some(failure),
+                statuses: VecDeque::from([status(2, 0), status(2, 0)]),
+                ..Default::default()
+            };
+            let progress = PrintProgress::default();
+            let error = execute_job(
+                &mut mock,
+                &test_raster(1),
+                "job",
+                "usb:test",
+                PrintSettings {
+                    margin: 14,
+                    copies: 2,
+                },
+                &progress,
+                tokio::time::Instant::now() + Duration::from_secs(1),
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.exit_code, 7);
+            assert!(!error.retryable);
+            assert_eq!(mock.writes.len(), failure);
+            let context = error.context.unwrap();
+            assert_eq!(context["current_copy"], 2);
+            assert_eq!(context["copies_requested"], 2);
+            assert_eq!(
+                context["copies_submitted"],
+                if failure == 7 { 2 } else { 1 }
+            );
+        }
+        let mut mock = Mock {
+            statuses: VecDeque::from([status(2, 0), status(2, 35)]),
+            ..Default::default()
+        };
+        let progress = PrintProgress::default();
+        let error = execute_job(
+            &mut mock,
+            &test_raster(1),
+            "job",
+            "usb:test",
+            PrintSettings {
+                margin: 14,
+                copies: 3,
+            },
+            &progress,
+            tokio::time::Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.exit_code, 5);
+        assert_eq!(mock.writes.len(), 5);
+        assert_eq!(error.context.unwrap()["copies_submitted"], 1);
+    }
+
+    #[tokio::test]
+    async fn batch_deadline_and_interruption_preserve_partial_submission() {
+        let mut mock = Mock {
+            pending_send_at: Some(4),
+            statuses: VecDeque::from([status(2, 0)]),
+            ..Default::default()
+        };
+        let progress = PrintProgress::default();
+        let error = execute_job(
+            &mut mock,
+            &test_raster(1),
+            "job",
+            "usb:test",
+            PrintSettings {
+                margin: 14,
+                copies: 3,
+            },
+            &progress,
+            tokio::time::Instant::now() + Duration::from_millis(10),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.exit_code, 7);
+        assert_eq!(mock.writes.len(), 4);
+        for context in [
+            error.context.unwrap(),
+            progress.interrupted().context.unwrap(),
+        ] {
+            assert_eq!(context["phase"], "page_header");
+            assert_eq!(context["copies_requested"], 3);
+            assert_eq!(context["current_copy"], 2);
+            assert_eq!(context["copies_submitted"], 1);
+            assert_eq!(context["transmission_started"], true);
+        }
+    }
+
+    #[tokio::test]
+    async fn invalid_copy_counts_are_rejected_before_decoding_or_connecting() {
+        for copies in [0, MAX_COPIES + 1, u32::MAX] {
+            let progress = PrintProgress::default();
+            let error = print_copies_with_progress(
+                "usb:missing",
+                &[],
+                "job",
+                Duration::from_secs(1),
+                copies,
+                progress.clone(),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.message.contains("copies"));
+            assert_eq!(error.exit_code, 2);
+            assert_eq!(progress.snapshot()["transmission_started"], false);
+        }
+        assert!(validate_copies(1).is_ok());
+        assert!(validate_copies(MAX_COPIES).is_ok());
     }
     #[tokio::test]
     async fn waiting_only_and_prior_busy_timeout() {
@@ -785,7 +1021,10 @@ mod tests {
             &test_raster(1),
             "job",
             "usb:test",
-            141,
+            PrintSettings {
+                margin: 141,
+                copies: 1,
+            },
             &p,
             tokio::time::Instant::now() - Duration::from_secs(1),
         )
