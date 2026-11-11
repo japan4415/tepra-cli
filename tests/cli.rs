@@ -36,6 +36,8 @@ fn render_and_dry_run_are_offline_and_detect_tampering() {
         input.to_str().unwrap(),
         "--content-length-mm",
         "50",
+        "--padding-right-mm",
+        "1",
         "--output",
         preview.to_str().unwrap(),
         "--job",
@@ -47,7 +49,11 @@ fn render_and_dry_run_are_offline_and_detect_tampering() {
         "{}",
         String::from_utf8_lossy(&rendered.stderr)
     );
-    assert_eq!(json(&rendered)["result"]["job"]["raster"]["width"], 709);
+    assert_eq!(json(&rendered)["result"]["job"]["raster"]["width"], 723);
+    assert_eq!(
+        json(&rendered)["result"]["job"]["options"]["padding_right_mm"],
+        1.0
+    );
     let args = [
         "print",
         "--job",
@@ -103,7 +109,9 @@ fn experimental_dry_run_enforces_native_size_limit_without_connecting() {
             "render",
             input.to_str().unwrap(),
             "--content-length-mm",
-            "101",
+            "100",
+            "--padding-right-mm",
+            "1",
             "--output",
             preview.to_str().unwrap(),
             "--job",

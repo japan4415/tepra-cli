@@ -73,6 +73,9 @@ enum Commands {
         tape_width: u32,
         #[arg(long)]
         content_length_mm: f64,
+        /// Append white space on the right after rendering, without resizing the artwork.
+        #[arg(long, default_value_t = 0.0)]
+        padding_right_mm: f64,
         #[arg(long, value_enum, default_value = "contain")]
         fit: Fit,
         #[arg(long, value_enum, default_value = "threshold")]
@@ -171,6 +174,7 @@ async fn run(command: Commands) -> Result<Value> {
             model,
             tape_width,
             content_length_mm,
+            padding_right_mm,
             fit,
             dither,
             threshold,
@@ -186,6 +190,7 @@ async fn run(command: Commands) -> Result<Value> {
                 &input,
                 &RenderOptions {
                     content_length_mm,
+                    padding_right_mm,
                     fit,
                     dither,
                     threshold,
