@@ -14,13 +14,16 @@ macOS + USB + 24mmテープで校正ラベルを印刷し、自動カットとCL
 
 ```sh
 git clone --branch v0.1.0 --depth 1 https://github.com/japan4415/tepra-cli.git
-cd tepra-cli/examples/aqua
-aqua policy allow aqua-policy.yaml
-aqua -c aqua.yaml install
-aqua -c aqua.yaml exec -- tepra --version
+cd tepra-cli
+# v0.1.0の設定例をaquaが自動検出するGitルートへ配置
+cp examples/aqua/aqua-policy.yaml aqua-policy.yaml
+aqua policy allow
+aqua -c examples/aqua/aqua.yaml update-checksum
+aqua -c examples/aqua/aqua.yaml install
+aqua -c examples/aqua/aqua.yaml exec -- tepra --version
 ```
 
-標準レジストリには未登録のため、このリポジトリのレジストリを明示的に許可します。設定は`japan4415/tepra-cli`だけを許可し、バージョン固定・SHA-256・GitHub Artifact Attestationsによる配布物の検証を有効にしています。生成される`aqua-checksums.json`は利用側のリポジトリへコミットしてください。既存のaqua設定への追加方法とGitHub認証については[配布とリリース](docs/releasing.md)を参照してください。
+標準レジストリには未登録のため、このリポジトリのレジストリを明示的に許可します。設定は`japan4415/tepra-cli`だけを許可し、バージョン固定・SHA-256・GitHub Artifact Attestationsによる配布物の検証を有効にしています。`require_checksum: true`のため、初回は`update-checksum`で署名付きチェックサムから固定値を作成してからインストールします。生成される`aqua-checksums.json`は利用側のリポジトリへコミットしてください。既存のaqua設定への追加方法とGitHub認証については[配布とリリース](docs/releasing.md)を参照してください。
 
 Linuxの配布バイナリはglibc 2.35以降と`libdbus-1.so.3`が必要です（Ubuntuでは`sudo apt-get install libdbus-1-3`）。macOSは13以降を対象とします。Windows ARM64・Alpine Linux向けバイナリは配布していません。バイナリのビルド・起動確認と、プリンター実機の対応確認は別です。
 

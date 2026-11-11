@@ -1,0 +1,34 @@
+{
+  "checksums": [
+    {
+      "id": "github_release/github.com/japan4415/tepra-cli/v0.1.0/tepra_0.1.0_darwin_amd64.tar.gz",
+      "checksum": "EA050D4516F61561E55A4A370CBF59BA5907185474FACFDDF2853A6E3C523651",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/japan4415/tepra-cli/v0.1.0/tepra_0.1.0_darwin_arm64.tar.gz",
+      "checksum": "4B3F80B98C3D49D2F23D64E6FCCDCB504C622BBB21529FCF462D3AF3BD9C6948",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/japan4415/tepra-cli/v0.1.0/tepra_0.1.0_linux_amd64.tar.gz",
+      "checksum": "FC15EF8CBA20BB6DFF38B1C6AF2DEFD57CD6CC5B70CD17083A57FE36DB043EAE",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/japan4415/tepra-cli/v0.1.0/tepra_0.1.0_linux_arm64.tar.gz",
+      "checksum": "473DA779598D5C32DD92BAB77ED8EBD6B57A807B5AE93924BD5E09A0FE073ACC",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "github_release/github.com/japan4415/tepra-cli/v0.1.0/tepra_0.1.0_windows_amd64.zip",
+      "checksum": "17F5E5A66FCE05E694D366DCEAB00058804339D59BE3B5DF3A64B5E2653FAEF3",
+      "algorithm": "sha256"
+    },
+    {
+      "id": "registries/github_content/github.com/japan4415/tepra-cli/v0.1.0/aqua-registry.yaml",
+      "checksum": "440EAA267D83DB3FE954124B879A7F6F835CE4F5F439D20D2955034BB8675937",
+      "algorithm": "sha256"
+    }
+  ]
+}

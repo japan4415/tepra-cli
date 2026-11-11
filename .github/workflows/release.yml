@@ -89,40 +89,7 @@ jobs:
           gh release upload "$RELEASE_TAG" dist/* --clobber
           gh release edit "$RELEASE_TAG" --draft=false --prerelease="$PRERELEASE" --latest="$([ "$PRERELEASE" = false ] && echo true || echo false)"
   install:
-    name: aqua install (${{ matrix.runner }})
     needs: publish
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-15, macos-15-intel, ubuntu-22.04, ubuntu-22.04-arm, windows-2022]
-    defaults:
-      run:
-        shell: bash
-    env:
-      RELEASE_TAG: ${{ github.ref_name }}
-      GITHUB_TOKEN: ${{ github.token }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: '0.13.7'
-          enable-cache: false
-      - name: Point example at this release
-        run: uv run --no-project --python 3.12 python scripts/aqua_smoke_config.py "$RELEASE_TAG"
-      - name: Use an isolated aqua installation
-        run: echo "AQUA_ROOT_DIR=$RUNNER_TEMP/aqua" >> "$GITHUB_ENV"
-      - uses: aquaproj/aqua-installer@a9a9563126b757a0dc438f5148a889bacdb828bb # v4.1.1
-        with:
-          aqua_version: v2.66.0
-          enable_aqua_install: 'false'
-      - name: Install with checksum and provenance verification
-        working-directory: examples/aqua
-        run: |
-          aqua policy allow aqua-policy.yaml
-          aqua -c aqua.yaml install
-          aqua -c aqua.yaml exec -- tepra --version
-          aqua -c aqua.yaml exec -- tepra --help
+    uses: ./.github/workflows/verify-install.yml
+    with:
+      tag: ${{ github.ref_name }}
