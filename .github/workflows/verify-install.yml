@@ -46,7 +46,7 @@ jobs:
         run: echo "AQUA_ROOT_DIR=$RUNNER_TEMP/aqua" >> "$GITHUB_ENV"
       - uses: aquaproj/aqua-installer@a9a9563126b757a0dc438f5148a889bacdb828bb # v4.1.1
         with:
-          aqua_version: v2.66.0
+          aqua_version: v2.66.1
           enable_aqua_install: 'false'
       - name: Install with checksum and provenance verification
         working-directory: examples/aqua
