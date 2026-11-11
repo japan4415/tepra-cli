@@ -134,7 +134,11 @@ def main() -> None:
             parser.error("package requires --target")
         binary_name = "tepra.exe" if TARGETS[args.target][0] == "windows" else "tepra"
         binary = ROOT / "target" / args.target / "release" / binary_name
-        files = {binary_name: binary.read_bytes(), "README.md": (ROOT / "README.md").read_bytes()}
+        files = {
+            binary_name: binary.read_bytes(),
+            "README.md": (ROOT / "README.md").read_bytes(),
+            "LICENSE": (ROOT / "LICENSE").read_bytes(),
+        }
         files.update({p.relative_to(ROOT).as_posix(): p.read_bytes() for p in sorted((ROOT / "docs").glob("*.md"))})
         args.directory.mkdir(parents=True, exist_ok=True)
         archive = args.directory / asset_name(args.target, release_version)
