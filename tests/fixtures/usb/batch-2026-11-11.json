@@ -53,6 +53,11 @@
     "state": "completed"
   },
   "persistent_result_matches_cli": true,
-  "user_observation": null,
-  "note": "Status confirms job completion; number of physical labels and leading scrap cuts awaits user observation."
+  "user_observation": {
+    "leading_scrap_count": 1,
+    "printed_label_count": 2,
+    "individual_label_cuts": true,
+    "reported": "はい、小片1回＋ラベル2枚でした"
+  },
+  "note": "Normal completion and durable record verified; user confirmed one leading scrap and two individually cut labels."
 }

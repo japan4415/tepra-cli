@@ -84,7 +84,7 @@ cargo run --example calibration -- calibration-75.png 75
 | BLE印刷 | 未実装 |
 | Windows公式WebAPI | 実装済み。HTTPモックテスト済み、Windows実機は未検証 |
 | Linux USB印刷 | コード経路あり、Linux実機は未検証 |
-| USB連続複数枚 | 1〜20枚を1ジョブで送信。実機確認の範囲はUSB実機検証を参照 |
+| USB連続複数枚 | 1〜20枚を1ジョブで送信。10mm＋右余白1mmの2枚で、小片1回・各ラベルのカットを実機確認 |
 | 4/6/9/12/18mmテープ | 未対応 |
 
 ## Windows公式WebAPI
