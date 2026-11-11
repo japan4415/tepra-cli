@@ -2,6 +2,8 @@
 
 エージェントが生成したPNGを印刷用に変換し、TEPRA SR-MK2へ送るRust CLIです。
 
+印刷向け画像の生成には、同梱の[画像プロンプト設計スキル](.agents/skills/image-prompt-design/SKILL.md)を使えます。白黒ラベルの描画サイズ、線幅、余白、文字、二値化後の確認に絞ったガイドです。
+
 macOS + USB + 24mmテープで校正ラベルを印刷し、自動カットとCLIのジョブ完了を確認しました。USB印刷は試験的な対応のため、`--experimental-usb`を明示します。Bluetoothは機器・GATTの診断までで、印刷はまだ対応していません。
 
 ## インストール
