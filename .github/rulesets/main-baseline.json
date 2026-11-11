@@ -35,6 +35,10 @@
           {
             "context": "Rust (ubuntu-latest)",
             "integration_id": 15368
+          },
+          {
+            "context": "Release checks",
+            "integration_id": 15368
           }
         ],
         "strict_required_status_checks_policy": true,

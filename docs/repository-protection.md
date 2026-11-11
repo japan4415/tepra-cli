@@ -9,7 +9,8 @@ JSON は設定内容の保存用であり、コミットしただけでは GitHu
 | `main-baseline` | PR必須、未解決レビュースレッドの解消、Rust CI成功、最新mainへの追従、force push・削除禁止 | 誰にも許可しない |
 | `main-owner-review` | Approve 1件、CODEOWNERの承認、差分更新時の承認失効 | Repository adminのみ、PR経由に限定 |
 
-CI の必須チェックは `Rust (ubuntu-latest)`、発行元は GitHub Actions（integration ID `15368`）。
+CI の必須チェックは `Rust (ubuntu-latest)` と `Release checks`、発行元は GitHub Actions（integration ID `15368`）。
+`Release checks` はレジストリ検証と5環境の配布アーカイブ検証がすべて成功したときだけ成功する。
 管理者ロールの ID は `5`。導入時の管理者は `japan4415` のみ。
 今後ほかの管理者を追加すると、その人にも承認のバイパス権限が付く。
 

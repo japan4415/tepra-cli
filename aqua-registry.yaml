@@ -28,6 +28,10 @@ packages:
       pattern:
         checksum: '^([A-Fa-f0-9]{64})'
         file: '^[A-Fa-f0-9]{64}\s+(\S+)$'
+      github_artifact_attestations:
+        enabled: true
+        signer_workflow: japan4415/tepra-cli/.github/workflows/release.yml
+        deny_self_hosted_runners: true
     github_artifact_attestations:
       enabled: true
       signer_workflow: japan4415/tepra-cli/.github/workflows/release.yml

@@ -70,7 +70,7 @@ packages:
 ポリシーは同梱の例を確認してから`aqua policy allow aqua-policy.yaml`で許可する。通常はaqua.yamlとポリシーがあるGitリポジトリ内で実行する。
 レジストリの参照先とパッケージのバージョンはどちらも固定し、更新時は両方を更新する。ポリシーはこのリポジトリの`aqua-registry.yaml`と`japan4415/tepra-cli`だけを許可し、無関係なレジストリを包括的に許可しない。
 
-aqua 2.65以降を使う。インストール時にSHA-256を照合し、GitHub Actionsの`release.yml`が署名したビルド証明を検証する。証明検証にはGitHub APIへの認証が必要になるため、GitHub CLIの認証またはaquaがサポートする`AQUA_GITHUB_TOKEN` / `GITHUB_TOKEN`を用意する。トークンは設定ファイルへ書かない。
+aqua 2.65以降を使う。インストール時にSHA-256を照合し、配布物とチェックサムの両方についてGitHub Actionsの`release.yml`が署名したビルド証明を検証する。aquaは検証用のGitHub CLIを自動導入する。GitHub APIの未認証アクセスはレート制限に当たりやすいため、GitHub CLIの認証またはaquaがサポートする`AQUA_GITHUB_TOKEN` / `GITHUB_TOKEN`を用意する。トークンは設定ファイルへ書かない。
 
 `aqua-checksums.json`は利用側で生成し、レビューしてGit管理する。チェックサムやattestation検証の無効化を解決策にしない。公開直後にAPIの反映待ちで証明が見つからない場合は少し待って再実行する。
 
