@@ -1,0 +1,4 @@
+interface:
+  display_name: "印刷向け画像プロンプト"
+  short_description: "白黒ラベルで潰れにくい線・余白・文字を指定し、印刷向け画像を生成する"
+  default_prompt: "$image-prompt-design を使って、この内容を白黒ラベルで読み取りやすい画像にするプロンプトを作成してください。"
