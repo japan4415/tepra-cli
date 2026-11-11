@@ -44,7 +44,7 @@ jobs:
         run: uv run --no-project --python 3.12 python scripts/aqua_smoke_config.py "$RELEASE_TAG"
       - name: Use an isolated aqua installation
         run: echo "AQUA_ROOT_DIR=$RUNNER_TEMP/aqua" >> "$GITHUB_ENV"
-      - uses: aquaproj/aqua-installer@a9a9563126b757a0dc438f5148a889bacdb828bb # v4.1.1
+      - uses: aquaproj/aqua-installer@611554c6f0137ba41c8dd15aca8bee82504ea461 # v4.1.1
         with:
           aqua_version: v2.66.1
           enable_aqua_install: 'false'
