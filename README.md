@@ -160,3 +160,7 @@ cargo test --locked --all-targets
 - [CLI設計](docs/design.md)
 - [USBプロトコルの解析根拠と実機確認](docs/usb-protocol.md)
 - [配布とリリース](docs/releasing.md)
+
+## ライセンス
+
+MIT License。詳細は[LICENSE](LICENSE)を参照してください。

@@ -17,7 +17,7 @@
 
 各環境の起動確認は`--version`と`--help`、機能確認はオフラインテストで行う。プリンターへは接続しない。実機の確認範囲は[USB検証記録](usb-validation.md)を参照する。
 
-ファイル名は`tepra_0.1.0_darwin_arm64.tar.gz`など、`tepra_<version>_<GOOS>_<GOARCH>.<format>`。アーカイブには`tepra`（Windowsでは`tepra.exe`）、READMEとdocsのMarkdownを含む。
+ファイル名は`tepra_0.1.0_darwin_arm64.tar.gz`など、`tepra_<version>_<GOOS>_<GOARCH>.<format>`。アーカイブには`tepra`（Windowsでは`tepra.exe`）、LICENSE、READMEとdocsのMarkdownを含む。LICENSEの同梱はv0.1.0より後のリリースから適用する。
 
 ## リリース手順
 

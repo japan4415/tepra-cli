@@ -3,6 +3,7 @@ name = "tepra-cli"
 version = "0.1.0"
 edition = "2024"
 description = "Image preparation and printer diagnostics for KING JIM TEPRA SR-MK2"
+license = "MIT"
 
 [lib]
 name = "tepra_cli"
