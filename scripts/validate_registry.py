@@ -13,6 +13,7 @@ from release import ROOT, TARGETS, asset_name, version
 registry = yaml.safe_load((ROOT / "aqua-registry.yaml").read_text())
 jsonschema.validate(registry, json.loads(Path(sys.argv[1]).read_text()))
 package = registry["packages"][0]
+assert (ROOT / "aqua-policy.yaml").read_bytes() == (ROOT / "examples/aqua/aqua-policy.yaml").read_bytes(), "aqua discovers policies only at the Git root (or its aqua/.aqua directory)"
 assert set(package["supported_envs"]) == {"/".join(env) for env in TARGETS.values()}
 for target, (system, arch) in TARGETS.items():
     template = package["asset"]

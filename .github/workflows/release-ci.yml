@@ -37,14 +37,19 @@ jobs:
           uv run --no-project --python 3.12 --with PyYAML==6.0.3 --with jsonschema==4.25.1 python scripts/validate_registry.py "$RUNNER_TEMP/aqua-registry-schema.json"
   archives:
     uses: ./.github/workflows/build-release.yml
+  install-example:
+    uses: ./.github/workflows/verify-install.yml
+    with:
+      tag: v0.1.0
   complete:
     name: Release checks
     if: always()
-    needs: [validate, archives]
+    needs: [validate, archives, install-example]
     runs-on: ubuntu-22.04
     timeout-minutes: 5
     env:
       VALIDATION_RESULT: ${{ needs.validate.result }}
       ARCHIVE_RESULT: ${{ needs.archives.result }}
+      INSTALL_RESULT: ${{ needs.install-example.result }}
     steps:
-      - run: test "$VALIDATION_RESULT" = success && test "$ARCHIVE_RESULT" = success
+      - run: test "$VALIDATION_RESULT" = success && test "$ARCHIVE_RESULT" = success && test "$INSTALL_RESULT" = success

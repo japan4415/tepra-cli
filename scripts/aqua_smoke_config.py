@@ -3,11 +3,11 @@
 import re
 import sys
 
-from release import ROOT, validate_tag, version
+from release import ROOT, validate_tag
 
 
 tag = sys.argv[1]
-validate_tag(tag, version())
+validate_tag(tag, tag.removeprefix("v"))
 path = ROOT / "examples/aqua/aqua.yaml"
 config = path.read_text()
 config = re.sub(r"(?m)^    ref: .+$", f"    ref: {tag}", config)

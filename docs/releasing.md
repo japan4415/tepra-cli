@@ -49,7 +49,7 @@ GitHub画面で先に「Publish release」を押す必要はない。タグのpu
 
 ## aquaの設定
 
-同梱の[設定例](../examples/aqua/aqua.yaml)と[ポリシー](../examples/aqua/aqua-policy.yaml)を使う。既存プロジェクトに導入する場合は、それぞれの内容を自分の設定ファイルへ統合する。
+同梱の[設定例](../examples/aqua/aqua.yaml)と[Gitルートのポリシー](../aqua-policy.yaml)を使う。既存プロジェクトに導入する場合は、それぞれの内容を自分の設定ファイルへ統合する。[コピー用のポリシー例](../examples/aqua/aqua-policy.yaml)も同梱するが、ネストしたディレクトリに置いただけでは自動検出されない。
 
 ```yaml
 checksum:
@@ -67,12 +67,16 @@ packages:
     registry: tepra
 ```
 
-ポリシーは同梱の例を確認してから`aqua policy allow aqua-policy.yaml`で許可する。通常はaqua.yamlとポリシーがあるGitリポジトリ内で実行する。
+ポリシーは同梱の例を確認してGitリポジトリのルートへ`aqua-policy.yaml`として配置し、`aqua policy allow`で許可する。aquaはGitルート（またはその直下の`aqua/`・`.aqua/`）だけでポリシーを探す。ファイル名を指定してallowしても、ネストした場所のファイルが自動的に検出対象へ追加されるわけではない。
+
+最初に`aqua -c examples/aqua/aqua.yaml update-checksum`を実行し、その後`aqua -c examples/aqua/aqua.yaml install`する。aqua v2の`require_checksum: true`は、配布元のチェックサムの有無にかかわらず、ローカルの`aqua-checksums.json`に固定値が必要という意味である。`update-checksum`は署名付きのSHA256SUMSを検証して固定値を作る。以後はこのファイルをGit管理し、バージョン更新時に更新する。
 レジストリの参照先とパッケージのバージョンはどちらも固定し、更新時は両方を更新する。ポリシーはこのリポジトリの`aqua-registry.yaml`と`japan4415/tepra-cli`だけを許可し、無関係なレジストリを包括的に許可しない。
 
 aqua 2.65以降を使う。インストール時にSHA-256を照合し、配布物とチェックサムの両方についてGitHub Actionsの`release.yml`が署名したビルド証明を検証する。aquaは検証用のGitHub CLIを自動導入する。GitHub APIの未認証アクセスはレート制限に当たりやすいため、GitHub CLIの認証またはaquaがサポートする`AQUA_GITHUB_TOKEN` / `GITHUB_TOKEN`を用意する。トークンは設定ファイルへ書かない。
 
-`aqua-checksums.json`は利用側で生成し、レビューしてGit管理する。チェックサムやattestation検証の無効化を解決策にしない。公開直後にAPIの反映待ちで証明が見つからない場合は少し待って再実行する。
+`aqua-checksums.json`は利用側で生成し、レビューしてGit管理する。このリポジトリにもv0.1.0の5環境分を記録する。チェックサムやattestation検証の無効化を解決策にしない。公開直後にAPIの反映待ちで証明が見つからない場合は少し待って再実行する。
+
+公開済みバージョンの導入だけを再検証するには`gh workflow run verify-install.yml --ref main -f tag=v0.1.0`を使う。リリース時と同じ5環境で検証し、バイナリの再公開は行わない。PRでもv0.1.0を使った導入検証を実行するため、ポリシーやチェックサムの初期設定の不備を公開前に検知できる。
 
 GitHub CLIで証明を手動確認する例:
 

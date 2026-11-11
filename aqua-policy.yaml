@@ -1,0 +1,11 @@
+---
+# Allow only this repository's registry and this package.
+registries:
+  - name: tepra
+    type: github_content
+    repo_owner: japan4415
+    repo_name: tepra-cli
+    path: aqua-registry.yaml
+packages:
+  - name: japan4415/tepra-cli
+    registry: tepra
