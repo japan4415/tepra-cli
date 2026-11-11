@@ -1,0 +1,128 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    outputs:
+      prerelease: ${{ steps.metadata.outputs.prerelease }}
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      REF_TYPE: ${{ github.ref_type }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.13.7'
+          enable-cache: false
+      - name: Require a tag on a commit already merged into main
+        run: |
+          test "$REF_TYPE" = tag
+          git merge-base --is-ancestor HEAD origin/main
+      - name: Check tag and Cargo versions
+        id: metadata
+        run: uv run --no-project --python 3.12 python scripts/release.py metadata --tag "$RELEASE_TAG"
+      - name: Test packaging checks
+        run: uv run --no-project --python 3.12 python -m unittest discover -s scripts -p 'test_*.py' -v
+  archives:
+    needs: validate
+    uses: ./.github/workflows/build-release.yml
+    with:
+      tag: ${{ github.ref_name }}
+  publish:
+    needs: [validate, archives]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_SHA: ${{ github.sha }}
+      PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.13.7'
+          enable-cache: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Require all five archives and generate SHA-256 checksums
+        run: uv run --no-project --python 3.12 python scripts/release.py checksums --tag "$RELEASE_TAG"
+      - name: Attest archives and checksums
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/*
+      - name: Publish only after all assets are ready
+        run: |
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$RELEASE_SHA"
+          if gh release view "$RELEASE_TAG" --json isDraft > "$RUNNER_TEMP/release.json"; then
+            jq -e '.isDraft == true' "$RUNNER_TEMP/release.json"
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --generate-notes --prerelease="$PRERELEASE"
+          fi
+          gh release upload "$RELEASE_TAG" dist/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease="$PRERELEASE" --latest="$([ "$PRERELEASE" = false ] && echo true || echo false)"
+  install:
+    name: aqua install (${{ matrix.runner }})
+    needs: publish
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel, ubuntu-22.04, ubuntu-22.04-arm, windows-2022]
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE_TAG: ${{ github.ref_name }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: '0.13.7'
+          enable-cache: false
+      - name: Point example at this release
+        run: uv run --no-project --python 3.12 python scripts/aqua_smoke_config.py "$RELEASE_TAG"
+      - name: Use an isolated aqua installation
+        run: echo "AQUA_ROOT_DIR=$RUNNER_TEMP/aqua" >> "$GITHUB_ENV"
+      - uses: aquaproj/aqua-installer@a9a9563126b757a0dc438f5148a889bacdb828bb # v4.1.1
+        with:
+          aqua_version: v2.66.0
+          enable_aqua_install: 'false'
+      - name: Install with checksum and provenance verification
+        working-directory: examples/aqua
+        run: |
+          aqua policy allow aqua-policy.yaml
+          aqua -c aqua.yaml install
+          aqua -c aqua.yaml exec -- tepra --version
+          aqua -c aqua.yaml exec -- tepra --help

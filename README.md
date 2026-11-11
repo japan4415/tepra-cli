@@ -8,7 +8,25 @@ macOS + USB + 24mmテープで校正ラベルを印刷し、自動カットとCL
 
 ## インストール
 
-Rust stableを用意して、このリポジトリで実行します。開発時のローカル検証はRust 1.98.1です。
+### aquaで導入
+
+[GitHub Releases](https://github.com/japan4415/tepra-cli/releases)に、macOS（Intel/Apple Silicon）、Linux（x64/ARM64）、Windows（x64）のビルド済みバイナリを配布します。Rustのインストールは不要です。aqua 2.65以降を用意し、次のように導入できます。
+
+```sh
+git clone --branch v0.1.0 --depth 1 https://github.com/japan4415/tepra-cli.git
+cd tepra-cli/examples/aqua
+aqua policy allow aqua-policy.yaml
+aqua -c aqua.yaml install
+aqua -c aqua.yaml exec -- tepra --version
+```
+
+標準レジストリには未登録のため、このリポジトリのレジストリを明示的に許可します。設定は`japan4415/tepra-cli`だけを許可し、バージョン固定・SHA-256・GitHub Artifact Attestationsによる配布物の検証を有効にしています。生成される`aqua-checksums.json`は利用側のリポジトリへコミットしてください。既存のaqua設定への追加方法とGitHub認証については[配布とリリース](docs/releasing.md)を参照してください。
+
+Linuxの配布バイナリはglibc 2.35以降と`libdbus-1.so.3`が必要です（Ubuntuでは`sudo apt-get install libdbus-1-3`）。macOSは13以降を対象とします。Windows ARM64・Alpine Linux向けバイナリは配布していません。バイナリのビルド・起動確認と、プリンター実機の対応確認は別です。
+
+### ソースから導入
+
+rustupを用意して、このリポジトリで実行します。`rust-toolchain.toml`でRust 1.98.1を固定しています。
 
 ```sh
 cargo install --path . --locked
@@ -133,8 +151,9 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked --all-targets
 ```
 
-自動テストは実機へ送信しません。CIはLinux（Ubuntu）のみでビルド、lint、オフラインテストを実行します。
+自動テストは実機へ送信しません。Rust CIはLinuxでformat・lint・オフラインテスト、Release CIは配布対象の5環境でテスト・releaseビルド・アーカイブ展開後の起動を検証します。リリースは`v*`タグのpushから自動実行します。
 
 - [印刷仕様・公式API・既存実装の調査](docs/research.md)
 - [CLI設計](docs/design.md)
 - [USBプロトコルの解析根拠と実機確認](docs/usb-protocol.md)
+- [配布とリリース](docs/releasing.md)

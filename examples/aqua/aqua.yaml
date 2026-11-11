@@ -1,0 +1,14 @@
+---
+checksum:
+  enabled: true
+  require_checksum: true
+registries:
+  - name: tepra
+    type: github_content
+    repo_owner: japan4415
+    repo_name: tepra-cli
+    ref: v0.1.0
+    path: aqua-registry.yaml
+packages:
+  - name: japan4415/tepra-cli@v0.1.0
+    registry: tepra
