@@ -1,0 +1,58 @@
+{
+  "date": "2026-11-11",
+  "model": "SR-MK2",
+  "transport": "USB",
+  "tape_width_mm": 24,
+  "content_length_mm": 10,
+  "padding_right_mm": 1,
+  "raster_dimensions": [
+    156,
+    256
+  ],
+  "copies_requested": 2,
+  "attempt_id": "1794362905133085000-18469",
+  "job_id": "e985106a0a1c443796043ef114ef1fb553350b783a6c1dc7fd3c5367e63a5524",
+  "backend_result": {
+    "completion_evidence": "usb_busy_then_idle",
+    "copies_requested": 2,
+    "copies_submitted": 2,
+    "device_id": "usb:serial:0d8a:0103:4530323130303030303030323145",
+    "final_status": {
+      "raw_bytes": [
+        22,
+        0,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        5,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ]
+    },
+    "job_id": "e985106a0a1c443796043ef114ef1fb553350b783a6c1dc7fd3c5367e63a5524",
+    "observed_st_transitions": [
+      2,
+      0
+    ],
+    "observed_st_transitions_truncated": false,
+    "resolved_device_id": "usb:00:1",
+    "state": "completed"
+  },
+  "persistent_result_matches_cli": true,
+  "user_observation": null,
+  "note": "Status confirms job completion; number of physical labels and leading scrap cuts awaits user observation."
+}

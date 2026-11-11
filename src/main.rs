@@ -102,12 +102,13 @@ enum Commands {
         device: String,
         #[arg(long, value_enum, default_value = "direct")]
         backend: Backend,
+        /// USB: 1-20 copies in one continuous job; WebAPI: one copy only.
         #[arg(long, default_value_t = 1)]
         copies: u32,
         /// Validate the job offline; never opens a connection or creates an attempt.
         #[arg(long)]
         dry_run: bool,
-        /// Use the SR-MK2 USB prototype (observed 24mm cartridge, one copy, <=100mm).
+        /// Use the SR-MK2 USB prototype (observed 24mm cartridge, <=100mm per label).
         #[arg(long)]
         experimental_usb: bool,
         /// USB: entire operation. WebAPI: submission/completion (preflight: 5s/request).
@@ -214,10 +215,13 @@ async fn run(command: Commands) -> Result<Value> {
             experimental_usb,
             timeout_seconds,
         } => {
-            if copies != 1 {
+            if matches!(backend, Backend::WindowsWebapi) && copies != 1 {
                 return Err(AppError::unsupported(
-                    "Only one copy per print attempt is supported",
+                    "The Windows WebAPI backend currently supports one copy only",
                 ));
+            }
+            if matches!(backend, Backend::Direct) {
+                tepra_cli::native_usb::validate_copies(copies)?;
             }
             if device.trim().is_empty() {
                 return Err(AppError::invalid("Device must not be empty"));
@@ -239,7 +243,7 @@ async fn run(command: Commands) -> Result<Value> {
             if dry_run {
                 return Ok(
                     json!({"state":"validated", "dry_run":true,"job_id":job_id,"device_id":device,
-                    "job":validated.job,"connected":false,"print_supported":matches!(backend,Backend::WindowsWebapi) || (experimental_usb && cfg!(any(target_os="macos", target_os="linux"))),
+                    "job":validated.job,"copies_requested":copies,"connected":false,"print_supported":matches!(backend,Backend::WindowsWebapi) || (experimental_usb && cfg!(any(target_os="macos", target_os="linux"))),
                     "note":"Offline validation only; printer presence, installed tape and physical output are not verified."}),
                 );
             }
@@ -247,15 +251,17 @@ async fn run(command: Commands) -> Result<Value> {
                 return Err(direct_unsupported());
             }
             let mut session = PrintSession::begin(&state_directory()?, &job_id, &device)?;
+            session.append(&json!({"event":"print_options","copies_requested":copies,"timeout_seconds":timeout_seconds}))?;
             let usb_progress = tepra_cli::native_usb::PrintProgress::default();
             let print = async {
                 match backend {
                     Backend::Direct => {
-                        tepra_cli::native_usb::print_with_progress(
+                        tepra_cli::native_usb::print_copies_with_progress(
                             &device,
                             &validated.png_bytes,
                             &job_id,
                             Duration::from_secs(timeout_seconds),
+                            copies,
                             usb_progress.clone(),
                         )
                         .await

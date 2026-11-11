@@ -61,11 +61,14 @@ fn render_and_dry_run_are_offline_and_detect_tampering() {
         "--device",
         "usb:does-not-exist:99",
         "--dry-run",
+        "--copies",
+        "2",
         "--json",
     ];
     let validated = cli(&args);
     assert!(validated.status.success());
     assert_eq!(json(&validated)["result"]["connected"], false);
+    assert_eq!(json(&validated)["result"]["copies_requested"], 2);
     assert_eq!(json(&validated)["result"]["print_supported"], false);
     let disabled = cli(&[
         "print",
@@ -93,6 +96,45 @@ fn render_and_dry_run_are_offline_and_detect_tampering() {
     let tampered = cli(&args);
     assert_eq!(tampered.status.code(), Some(2));
     assert_eq!(json(&tampered)["ok"], false);
+}
+
+#[test]
+fn invalid_or_unsupported_copy_counts_fail_before_reading_job() {
+    for copies in ["0", "21", "4294967295"] {
+        let output = cli(&[
+            "print",
+            "--job",
+            "missing.json",
+            "--device",
+            "usb:missing",
+            "--copies",
+            copies,
+            "--experimental-usb",
+            "--dry-run",
+            "--json",
+        ]);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            json(&output)["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("copies")
+        );
+    }
+    let output = cli(&[
+        "print",
+        "--job",
+        "missing.json",
+        "--device",
+        "printer",
+        "--copies",
+        "2",
+        "--backend",
+        "windows-webapi",
+        "--dry-run",
+        "--json",
+    ]);
+    assert_eq!(output.status.code(), Some(6));
 }
 
 #[test]
