@@ -15,10 +15,11 @@ jsonschema.validate(registry, json.loads(Path(sys.argv[1]).read_text()))
 package = registry["packages"][0]
 assert (ROOT / "aqua-policy.yaml").read_bytes() == (ROOT / "examples/aqua/aqua-policy.yaml").read_bytes(), "aqua discovers policies only at the Git root (or its aqua/.aqua directory)"
 assert set(package["supported_envs"]) == {"/".join(env) for env in TARGETS.values()}
+release_version = version()
 for target, (system, arch) in TARGETS.items():
     template = package["asset"]
     if system == "windows":
         template = package["overrides"][0]["asset"]
-    name = template.replace("{{trimV .Version}}", version()).replace("{{.OS}}", system).replace("{{.Arch}}", arch)
-    assert name == asset_name(target, version()), name
+    name = template.replace("{{trimV .Version}}", release_version).replace("{{.OS}}", system).replace("{{.Arch}}", arch)
+    assert name == asset_name(target, release_version), name
 print("aqua registry schema and five release asset mappings are valid")

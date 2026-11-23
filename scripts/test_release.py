@@ -5,6 +5,7 @@ import tempfile
 import unittest
 import zipfile
 
+import aqua_smoke_config
 import release
 
 
@@ -21,7 +22,12 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             for ext, executable in [("tar.gz", "tepra"), ("zip", "tepra.exe")]:
-                files = {executable: b"binary", "README.md": b"documentation", "docs/release.md": b"release"}
+                files = {
+                    executable: b"binary",
+                    "README.md": b"documentation",
+                    "tepra-notes.md": b"notes",
+                    "docs/release.md": b"release",
+                }
                 a, b = root / ("a." + ext), root / ("b." + ext)
                 release.write_archive(a, files)
                 release.write_archive(b, files)
@@ -30,10 +36,13 @@ class ReleaseTests(unittest.TestCase):
                     with tarfile.open(a) as archive:
                         self.assertEqual(set(archive.getnames()), set(files))
                         self.assertEqual(archive.getmember(executable).mode, 0o755)
+                        self.assertEqual(archive.getmember("tepra-notes.md").mode, 0o644)
                         self.assertEqual(archive.extractfile(executable).read(), b"binary")
                 else:
                     with zipfile.ZipFile(a) as archive:
                         self.assertEqual(set(archive.namelist()), set(files))
+                        self.assertEqual((archive.getinfo(executable).external_attr >> 16) & 0o777, 0o755)
+                        self.assertEqual((archive.getinfo("tepra-notes.md").external_attr >> 16) & 0o777, 0o644)
                         self.assertEqual(archive.read(executable), b"binary")
                 with self.assertRaises(FileExistsError):
                     release.write_archive(a, files)
@@ -56,6 +65,10 @@ class ReleaseTests(unittest.TestCase):
             for line in lines:
                 digest, name = line.split("  ")
                 self.assertEqual(digest, hashlib.sha256((root / name).read_bytes()).hexdigest())
+
+    def test_example_aqua_tag_is_valid(self):
+        tag = aqua_smoke_config.read_example_tag()
+        self.assertTrue(tag.startswith("v"))
 
 
 if __name__ == "__main__":

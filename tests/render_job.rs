@@ -237,3 +237,60 @@ fn job_rejects_transparency_and_animation_even_with_matching_hash() {
         assert!(load_job(&job).is_err(), "animated={animated}");
     }
 }
+
+#[test]
+fn opaque_rgb_and_luma_fast_paths_match_rgba_rendering() {
+    let dir = tempfile::tempdir().unwrap();
+    let rgba_path = dir.path().join("rgba.png");
+    let rgb_path = dir.path().join("rgb.png");
+    let luma_path = dir.path().join("luma.png");
+    let rgba = RgbaImage::from_fn(29, 17, |x, y| {
+        let v = ((x * 13 + y * 29) % 256) as u8;
+        Rgba([v, v, v, 255])
+    });
+    let rgb = image::RgbImage::from_fn(29, 17, |x, y| {
+        let v = ((x * 13 + y * 29) % 256) as u8;
+        image::Rgb([v, v, v])
+    });
+    let luma = image::GrayImage::from_fn(29, 17, |x, y| {
+        let v = ((x * 13 + y * 29) % 256) as u8;
+        image::Luma([v])
+    });
+    rgba.save(&rgba_path).unwrap();
+    rgb.save(&rgb_path).unwrap();
+    luma.save(&luma_path).unwrap();
+    for dither in [Dither::Threshold, Dither::FloydSteinberg] {
+        let mut opts = options();
+        opts.dither = dither;
+        opts.padding_right_mm = 1.0;
+        let expected = render(&rgba_path, &opts).unwrap().png_bytes;
+        assert_eq!(render(&rgb_path, &opts).unwrap().png_bytes, expected);
+        assert_eq!(render(&luma_path, &opts).unwrap().png_bytes, expected);
+    }
+}
+
+#[test]
+fn write_job_cleans_up_if_job_exists_and_load_exposes_binary_pixels() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in.png");
+    RgbaImage::from_pixel(2, 2, Rgba([0, 0, 0, 255]))
+        .save(&input)
+        .unwrap();
+    let rendered = render(&input, &options()).unwrap();
+    let existing_job = dir.path().join("existing.json");
+    let new_raster = dir.path().join("new-raster.png");
+    std::fs::write(&existing_job, b"keep").unwrap();
+    assert!(write_job(&rendered, &new_raster, &existing_job).is_err());
+    assert!(!new_raster.exists());
+    assert_eq!(std::fs::read(&existing_job).unwrap(), b"keep");
+
+    let raster = dir.path().join("ok.png");
+    let job = dir.path().join("ok.json");
+    write_job(&rendered, &raster, &job).unwrap();
+    let loaded = load_job(&job).unwrap();
+    assert_eq!(
+        loaded.raster_pixels.len(),
+        (loaded.job.raster.width * loaded.job.raster.height) as usize
+    );
+    assert!(loaded.raster_pixels.iter().all(|&p| p == 0 || p == 255));
+}

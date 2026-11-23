@@ -1,6 +1,5 @@
 //! A per-user process lock and durable, conservative print-attempt records.
 use crate::error::{AppError, Result};
-use fs2::FileExt;
 use serde_json::{Value, json};
 use std::{
     fs::{self, File, OpenOptions},
@@ -45,7 +44,7 @@ impl PrintSession {
             .truncate(false)
             .open(directory.join("print.lock"))
             .map_err(record_error)?;
-        FileExt::try_lock_exclusive(&lock).map_err(|e| {
+        lock.try_lock().map_err(|e| {
             AppError::new(
                 "printer_busy",
                 format!("Another tepra process is printing, or the lock is unavailable: {e}"),

@@ -1,10 +1,11 @@
 use crate::{
     error::{AppError, Result},
     render::{self, DPI, HEAD_DOTS, MAX_FILE_BYTES, RenderOptions, Rendered},
+    sr_mk2::decode_binary_raster,
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    fs::{self, OpenOptions},
+    fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Component, Path},
 };
@@ -34,6 +35,7 @@ pub struct Job {
 pub struct ValidatedJob {
     pub job: Job,
     pub png_bytes: Vec<u8>,
+    pub raster_pixels: Vec<u8>,
 }
 fn filename(path: &Path) -> Result<String> {
     let name = path
@@ -50,10 +52,9 @@ fn valid_hash(s: &str) -> bool {
         && s.bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
-fn read_limited(path: &Path, max: u64) -> Result<Vec<u8>> {
-    let f = fs::File::open(path)
-        .map_err(|e| AppError::invalid(format!("cannot open {}: {e}", path.display())))?;
-    let mut bytes = Vec::new();
+fn read_file_limited(f: File, max: u64) -> Result<Vec<u8>> {
+    let capacity = f.metadata().map(|m| m.len().min(max) as usize).unwrap_or(0);
+    let mut bytes = Vec::with_capacity(capacity);
     f.take(max + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| AppError::invalid(format!("cannot read file: {e}")))?;
@@ -61,6 +62,34 @@ fn read_limited(path: &Path, max: u64) -> Result<Vec<u8>> {
         return Err(AppError::invalid("file exceeds size limit"));
     }
     Ok(bytes)
+}
+fn read_limited(path: &Path, max: u64) -> Result<Vec<u8>> {
+    let f = File::open(path)
+        .map_err(|e| AppError::invalid(format!("cannot open {}: {e}", path.display())))?;
+    read_file_limited(f, max)
+}
+fn read_regular_no_symlink(path: &Path, max: u64) -> Result<Vec<u8>> {
+    let sym_meta = fs::symlink_metadata(path)
+        .map_err(|e| AppError::invalid(format!("cannot stat raster: {e}")))?;
+    if !sym_meta.file_type().is_file() {
+        return Err(AppError::invalid("raster must be a regular file"));
+    }
+    let file = File::open(path)
+        .map_err(|e| AppError::invalid(format!("cannot open {}: {e}", path.display())))?;
+    let fd_meta = file
+        .metadata()
+        .map_err(|e| AppError::invalid(format!("cannot stat raster: {e}")))?;
+    if !fd_meta.file_type().is_file() {
+        return Err(AppError::invalid("raster must be a regular file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if sym_meta.dev() != fd_meta.dev() || sym_meta.ino() != fd_meta.ino() {
+            return Err(AppError::invalid("raster changed while opening"));
+        }
+    }
+    read_file_limited(file, max)
 }
 pub fn write_job(rendered: &Rendered, output: &Path, job_path: &Path) -> Result<Job> {
     let out_parent = output
@@ -100,17 +129,13 @@ pub fn write_job(rendered: &Rendered, output: &Path, job_path: &Path) -> Result<
     };
     let json = serde_json::to_vec_pretty(&job)
         .map_err(|e| AppError::invalid(format!("cannot serialize job: {e}")))?;
+    // Create both files before writing either so an existing job_path never
+    // causes a full PNG write followed by deletion.
     let mut raster = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(output)
         .map_err(|e| AppError::invalid(format!("cannot create raster: {e}")))?;
-    if let Err(e) = raster.write_all(&rendered.png_bytes) {
-        drop(raster);
-        let _ = fs::remove_file(output);
-        return Err(AppError::invalid(format!("cannot write raster: {e}")));
-    }
-    drop(raster);
     let mut file = match OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -118,11 +143,20 @@ pub fn write_job(rendered: &Rendered, output: &Path, job_path: &Path) -> Result<
     {
         Ok(f) => f,
         Err(e) => {
+            drop(raster);
             let _ = fs::remove_file(output);
             return Err(AppError::invalid(format!("cannot create job: {e}")));
         }
     };
+    if let Err(e) = raster.write_all(&rendered.png_bytes) {
+        drop(raster);
+        drop(file);
+        let _ = fs::remove_file(job_path);
+        let _ = fs::remove_file(output);
+        return Err(AppError::invalid(format!("cannot write raster: {e}")));
+    }
     if let Err(e) = file.write_all(&json) {
+        drop(raster);
         drop(file);
         let _ = fs::remove_file(job_path);
         let _ = fs::remove_file(output);
@@ -166,52 +200,14 @@ pub fn load_job(path: &Path) -> Result<ValidatedJob> {
         .parent()
         .unwrap_or(Path::new("."))
         .join(&job.raster.filename);
-    let meta = fs::symlink_metadata(&raster_path)
-        .map_err(|e| AppError::invalid(format!("cannot stat raster: {e}")))?;
-    if !meta.file_type().is_file() {
-        return Err(AppError::invalid("raster must be a regular file"));
-    }
-    let png_bytes = read_limited(&raster_path, MAX_FILE_BYTES)?;
+    let png_bytes = read_regular_no_symlink(&raster_path, MAX_FILE_BYTES)?;
     if render::sha256(&png_bytes) != job.raster.sha256 {
         return Err(AppError::invalid("raster SHA-256 mismatch"));
     }
-    let decoder = png::Decoder::new(std::io::BufReader::new(std::io::Cursor::new(&png_bytes)));
-    let mut reader = decoder
-        .read_info()
-        .map_err(|e| AppError::invalid(format!("invalid raster PNG: {e}")))?;
-    let info = reader.info();
-    if info.width != width
-        || info.height != HEAD_DOTS
-        || info.color_type != png::ColorType::Grayscale
-        || info.bit_depth != png::BitDepth::Eight
-        || info.trns.is_some()
-        || info.animation_control.is_some()
-        || info.frame_control.is_some()
-        || !matches!(
-            info.pixel_dims,
-            Some(png::PixelDimensions {
-                xppu: 14173,
-                yppu: 14173,
-                unit: png::Unit::Meter
-            })
-        )
-    {
-        return Err(AppError::invalid(
-            "raster PNG format, dimensions or resolution mismatch",
-        ));
-    }
-    let size = reader
-        .output_buffer_size()
-        .ok_or_else(|| AppError::invalid("invalid raster buffer size"))?;
-    if size != (width * HEAD_DOTS) as usize {
-        return Err(AppError::invalid("invalid raster buffer size"));
-    }
-    let mut pixels = vec![0; size];
-    reader
-        .next_frame(&mut pixels)
-        .map_err(|e| AppError::invalid(format!("invalid raster PNG: {e}")))?;
-    if pixels.iter().any(|&v| v != 0 && v != 255) {
-        return Err(AppError::invalid("raster is not binary"));
-    }
-    Ok(ValidatedJob { job, png_bytes })
+    let decoded = decode_binary_raster(&png_bytes, Some(width), None)?;
+    Ok(ValidatedJob {
+        job,
+        png_bytes,
+        raster_pixels: decoded.pixels,
+    })
 }

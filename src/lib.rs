@@ -4,5 +4,6 @@ pub mod job;
 pub mod native_usb;
 pub mod render;
 pub mod session;
+pub(crate) mod sr_mk2;
 pub mod usb_status;
 pub mod webapi;

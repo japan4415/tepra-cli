@@ -1,6 +1,9 @@
-use crate::error::{AppError, Result};
+use crate::{
+    error::{AppError, Result},
+    sr_mk2::PNG_PPM_360DPI,
+};
 use clap::ValueEnum;
-use image::{ImageReader, Rgb, RgbImage, imageops};
+use image::{DynamicImage, ImageReader, Rgb, RgbImage, imageops};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
@@ -63,7 +66,7 @@ pub fn width_for_length(mm: f64) -> Result<u32> {
     }
     Ok(dots as u32)
 }
-pub fn width_with_padding(options: &RenderOptions) -> Result<u32> {
+fn widths(options: &RenderOptions) -> Result<(u32, u32)> {
     let content_width = width_for_length(options.content_length_mm)?;
     if !options.padding_right_mm.is_finite() || options.padding_right_mm < 0.0 {
         return Err(AppError::invalid(
@@ -75,14 +78,22 @@ pub fn width_with_padding(options: &RenderOptions) -> Result<u32> {
             "content length plus right padding must be at most 1000 mm",
         ));
     }
-    Ok(content_width + (options.padding_right_mm * f64::from(DPI) / 25.4).round() as u32)
+    let output_width =
+        content_width + (options.padding_right_mm * f64::from(DPI) / 25.4).round() as u32;
+    Ok((content_width, output_width))
+}
+pub fn width_with_padding(options: &RenderOptions) -> Result<u32> {
+    widths(options).map(|(_, output_width)| output_width)
 }
 pub fn render(input: &Path, options: &RenderOptions) -> Result<Rendered> {
-    let output_width = width_with_padding(options)?;
-    let width = width_for_length(options.content_length_mm)?;
+    let (width, output_width) = widths(options)?;
     let file = fs::File::open(input)
         .map_err(|e| AppError::invalid(format!("cannot read input PNG: {e}")))?;
-    let mut data = Vec::new();
+    let capacity = file
+        .metadata()
+        .map(|m| m.len().min(MAX_FILE_BYTES) as usize)
+        .unwrap_or(0);
+    let mut data = Vec::with_capacity(capacity);
     file.take(MAX_FILE_BYTES + 1)
         .read_to_end(&mut data)
         .map_err(|e| AppError::invalid(format!("cannot read input PNG: {e}")))?;
@@ -139,20 +150,42 @@ pub fn render(input: &Path, options: &RenderOptions) -> Result<Rendered> {
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(MAX_WORK_BYTES);
     reader.limits(limits);
-    let rgba = reader
+    let decoded = reader
         .decode()
-        .map_err(|e| AppError::invalid(format!("cannot decode PNG: {e}")))?
-        .to_rgba8();
-    let mut rgb = RgbImage::new(iw, ih);
-    for (x, y, p) in rgba.enumerate_pixels() {
-        let a = u32::from(p[3]);
-        let blend = |c: u8| ((u32::from(c) * a + 255 * (255 - a) + 127) / 255) as u8;
-        rgb.put_pixel(x, y, Rgb([blend(p[0]), blend(p[1]), blend(p[2])]));
-    }
-    drop(rgba);
-    let mut canvas = RgbImage::from_pixel(width, HEAD_DOTS, Rgb([255, 255, 255]));
-    match options.fit {
+        .map_err(|e| AppError::invalid(format!("cannot decode PNG: {e}")))?;
+    let rgb = match decoded {
+        DynamicImage::ImageRgb8(img) => img,
+        DynamicImage::ImageLuma8(_)
+        | DynamicImage::ImageRgb16(_)
+        | DynamicImage::ImageLuma16(_) => decoded.to_rgb8(),
+        other => {
+            let rgba = other.into_rgba8();
+            let mut out = vec![0u8; (iw as usize) * (ih as usize) * 3];
+            for (src, dst) in rgba
+                .as_raw()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(out.as_chunks_mut::<3>().0.iter_mut())
+            {
+                let a = u32::from(src[3]);
+                if a == 255 {
+                    dst.copy_from_slice(&src[..3]);
+                } else if a == 0 {
+                    *dst = [255, 255, 255];
+                } else {
+                    let inv = 255 * (255 - a) + 127;
+                    dst[0] = ((u32::from(src[0]) * a + inv) / 255) as u8;
+                    dst[1] = ((u32::from(src[1]) * a + inv) / 255) as u8;
+                    dst[2] = ((u32::from(src[2]) * a + inv) / 255) as u8;
+                }
+            }
+            RgbImage::from_raw(iw, ih, out).expect("RGB buffer matches decoded dimensions")
+        }
+    };
+    let canvas = match options.fit {
         Fit::Contain => {
+            let mut canvas = RgbImage::from_pixel(width, HEAD_DOTS, Rgb([255, 255, 255]));
             let w = (resize_width as u32).min(width);
             let h = (resize_height as u32).min(HEAD_DOTS);
             let resized = imageops::resize(&rgb, w, h, imageops::FilterType::Lanczos3);
@@ -162,65 +195,77 @@ pub fn render(input: &Path, options: &RenderOptions) -> Result<Rendered> {
                 i64::from((width - w) / 2),
                 i64::from((HEAD_DOTS - h) / 2),
             );
+            canvas
         }
         Fit::Cover => {
             let w = (resize_width as u32).max(width);
             let h = (resize_height as u32).max(HEAD_DOTS);
             let resized = imageops::resize(&rgb, w, h, imageops::FilterType::Lanczos3);
-            canvas = imageops::crop_imm(
+            imageops::crop_imm(
                 &resized,
                 (w - width) / 2,
                 (h - HEAD_DOTS) / 2,
                 width,
                 HEAD_DOTS,
             )
-            .to_image();
+            .to_image()
         }
-    }
-    let mut gray: Vec<f32> = canvas
-        .pixels()
-        .map(|p| 0.2126 * f32::from(p[0]) + 0.7152 * f32::from(p[1]) + 0.0722 * f32::from(p[2]))
-        .collect();
-    let mut mono = vec![255u8; (width * HEAD_DOTS) as usize];
+    };
+    // Pre-allocate with white padding on the right; dithering only writes 0..width
+    // so neither resampling nor error diffusion affects the padded region.
+    let mut mono = vec![255u8; out_pixels as usize];
     let w = width as usize;
-    for y in 0..HEAD_DOTS as usize {
-        for x in 0..w {
-            let i = y * w + x;
-            let old = gray[i].clamp(0.0, 255.0);
-            let value = if old < f32::from(options.threshold) {
-                0
-            } else {
-                255
-            };
-            mono[i] = value;
-            if options.dither == Dither::FloydSteinberg {
-                let e = old - f32::from(value);
-                if x + 1 < w {
-                    gray[i + 1] += e * 7.0 / 16.0;
+    let out_w = output_width as usize;
+    let threshold = f32::from(options.threshold);
+    match options.dither {
+        Dither::Threshold => {
+            for (src_row, dst_row) in canvas
+                .as_raw()
+                .chunks_exact(w * 3)
+                .zip(mono.chunks_exact_mut(out_w))
+            {
+                for (px, dst) in src_row.as_chunks::<3>().0.iter().zip(&mut dst_row[..w]) {
+                    let luma = (0.2126 * f32::from(px[0])
+                        + 0.7152 * f32::from(px[1])
+                        + 0.0722 * f32::from(px[2]))
+                    .clamp(0.0, 255.0);
+                    *dst = if luma < threshold { 0 } else { 255 };
                 }
-                if y + 1 < HEAD_DOTS as usize {
-                    if x > 0 {
-                        gray[i + w - 1] += e * 3.0 / 16.0;
-                    }
-                    gray[i + w] += e * 5.0 / 16.0;
+            }
+        }
+        Dither::FloydSteinberg => {
+            let mut gray: Vec<f32> = canvas
+                .as_raw()
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|p| {
+                    0.2126 * f32::from(p[0]) + 0.7152 * f32::from(p[1]) + 0.0722 * f32::from(p[2])
+                })
+                .collect();
+            for y in 0..HEAD_DOTS as usize {
+                let dst_row = &mut mono[y * out_w..y * out_w + w];
+                for (x, dst) in dst_row.iter_mut().enumerate() {
+                    let i = y * w + x;
+                    let old = gray[i].clamp(0.0, 255.0);
+                    let value = if old < threshold { 0 } else { 255 };
+                    *dst = value;
+                    let e = old - f32::from(value);
                     if x + 1 < w {
-                        gray[i + w + 1] += e / 16.0;
+                        gray[i + 1] += e * 7.0 / 16.0;
+                    }
+                    if y + 1 < HEAD_DOTS as usize {
+                        if x > 0 {
+                            gray[i + w - 1] += e * 3.0 / 16.0;
+                        }
+                        gray[i + w] += e * 5.0 / 16.0;
+                        if x + 1 < w {
+                            gray[i + w + 1] += e / 16.0;
+                        }
                     }
                 }
             }
         }
-    }
-    // Append after dithering so neither resampling nor error diffusion changes
-    // the original artwork or introduces black pixels into the white padding.
-    if output_width != width {
-        let mut padded = vec![255u8; out_pixels as usize];
-        for (source, target) in mono
-            .chunks_exact(w)
-            .zip(padded.chunks_exact_mut(output_width as usize))
-        {
-            target[..w].copy_from_slice(source);
-        }
-        mono = padded;
     }
     let mut png_bytes = Vec::new();
     {
@@ -228,8 +273,8 @@ pub fn render(input: &Path, options: &RenderOptions) -> Result<Rendered> {
         encoder.set_color(png::ColorType::Grayscale);
         encoder.set_depth(png::BitDepth::Eight);
         encoder.set_pixel_dims(Some(png::PixelDimensions {
-            xppu: 14173,
-            yppu: 14173,
+            xppu: PNG_PPM_360DPI,
+            yppu: PNG_PPM_360DPI,
             unit: png::Unit::Meter,
         }));
         let mut writer = encoder

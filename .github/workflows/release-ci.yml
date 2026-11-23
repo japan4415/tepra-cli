@@ -17,6 +17,8 @@ jobs:
     name: Release metadata and registry
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    outputs:
+      example_tag: ${{ steps.example_tag.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,6 +31,9 @@ jobs:
         run: |
           uv run --no-project --python 3.12 python -m unittest discover -s scripts -p 'test_*.py' -v
           uv run --no-project --python 3.12 python scripts/release.py metadata
+      - name: Read example aqua release tag
+        id: example_tag
+        run: uv run --no-project --python 3.12 python scripts/aqua_smoke_config.py --read
       - name: Validate aqua registry against pinned upstream schema
         env:
           GH_TOKEN: ${{ github.token }}
@@ -38,9 +43,10 @@ jobs:
   archives:
     uses: ./.github/workflows/build-release.yml
   install-example:
+    needs: validate
     uses: ./.github/workflows/verify-install.yml
     with:
-      tag: v0.1.0
+      tag: ${{ needs.validate.outputs.example_tag }}
   complete:
     name: Release checks
     if: always()
