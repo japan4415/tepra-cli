@@ -57,6 +57,9 @@ def asset_name(target: str, release_version: str) -> str:
     return f"tepra_{release_version}_{system}_{arch}.{extension}"
 
 
+EXECUTABLES = {"tepra", "tepra.exe"}
+
+
 def write_archive(destination: Path, files: dict[str, bytes]) -> None:
     """Stable metadata; binaries remain executable after extraction."""
     if destination.suffix == ".zip":
@@ -64,7 +67,7 @@ def write_archive(destination: Path, files: dict[str, bytes]) -> None:
             for name, data in sorted(files.items()):
                 info = zipfile.ZipInfo(name, date_time=(2000, 1, 1, 0, 0, 0))
                 info.create_system = 3
-                info.external_attr = (stat.S_IFREG | (0o755 if name.startswith("tepra") else 0o644)) << 16
+                info.external_attr = (stat.S_IFREG | (0o755 if name in EXECUTABLES else 0o644)) << 16
                 info.compress_type = zipfile.ZIP_DEFLATED
                 archive.writestr(info, data)
     else:
@@ -74,7 +77,7 @@ def write_archive(destination: Path, files: dict[str, bytes]) -> None:
                     for name, data in sorted(files.items()):
                         info = tarfile.TarInfo(name)
                         info.size = len(data)
-                        info.mode = 0o755 if name == "tepra" else 0o644
+                        info.mode = 0o755 if name in EXECUTABLES else 0o644
                         archive.addfile(info, io.BytesIO(data))
 
 

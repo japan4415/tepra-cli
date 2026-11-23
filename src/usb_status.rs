@@ -3,6 +3,8 @@
 //! The request and raw field names were located in TEPRA LINK 2 1.4.0.
 //! This is a read request, not an implementation of the printing protocol.
 use crate::error::{AppError, Result};
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+use crate::sr_mk2::{OBSERVED_24MM_CARTRIDGE_PROFILE, OBSERVED_24MM_TAPE_CODE, STATUS_LEN};
 use serde_json::Value;
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 use serde_json::json;
@@ -22,7 +24,7 @@ pub(crate) fn error_name(code: u8) -> &'static str {
 
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn decode_status(data: &[u8]) -> Result<Value> {
-    if data.len() != 22 || data[0] != 22 {
+    if data.len() != STATUS_LEN || data[0] != STATUS_LEN as u8 {
         return Err(AppError::unsupported(
             "Unexpected SR-MK2 status response; expected a 22-byte status record",
         ));
@@ -35,7 +37,7 @@ fn decode_status(data: &[u8]) -> Result<Value> {
         3..=5 => "waiting",
         _ => "unknown",
     };
-    let observed_profile = data[6..12] == [5, 0, 5, 0, 0, 1];
+    let observed_profile = data[6..12] == OBSERVED_24MM_CARTRIDGE_PROFILE;
     Ok(json!({"raw_bytes":data,
         "raw_fields":{"ST":data[1] as i8,"ER":data[2] as i8,"ER2":data[2] as i8,
             "EI2":data[4] as i8,"EJ2":data[5] as i8,"TW":data[6] as i8,"TR":data[7] as i8,
@@ -43,7 +45,7 @@ fn decode_status(data: &[u8]) -> Result<Value> {
             "PP":u16::from_be_bytes([data[12],data[13]]),
             "RB":u32::from_be_bytes([data[14],data[15],data[16],data[17]]),
             "WA":data[18] as i8,"VER":data[19] as i8,"RES":u16::from_be_bytes([data[20],data[21]])},
-        "ready":null,"tape_width_mm":if data[6]==5 {Some(24)} else {None},"printing_completed":null,
+        "ready":null,"tape_width_mm":if data[6]==OBSERVED_24MM_TAPE_CODE {Some(24)} else {None},"printing_completed":null,
         "summary":{
             "activity":activity,
             "error":error_name(data[2]),
@@ -56,7 +58,6 @@ fn decode_status(data: &[u8]) -> Result<Value> {
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub async fn status(device_id: &str) -> Result<Value> {
-    use nusb::transfer::{ControlIn, ControlType, Recipient};
     use std::{future::IntoFuture, time::Duration};
     if !device_id.starts_with("usb:") {
         return Err(AppError::unsupported(
@@ -64,43 +65,15 @@ pub async fn status(device_id: &str) -> Result<Value> {
         ));
     }
     let operation = async {
-        let devices = nusb::list_devices().await.map_err(connection_error)?;
-        let devices: Vec<_> = devices.collect();
-        let info = crate::discovery::resolve_usb_device(device_id, &devices)?;
-        let resolved_device_id = format!("usb:{}:{}", info.bus_id(), info.device_address());
-        if info.vendor_id() != 0x0d8a || info.product_id() != 0x0103 {
-            return Err(AppError::new(
-                "printer_mismatch",
-                "Status query is restricted to SR-MK2 USB 0d8a:0103",
-                3,
-            ));
-        }
-        let device = info.open().await.map_err(connection_error)?;
-        let config = device.active_configuration().map_err(connection_error)?;
-        let matches_profile = config.interface_alt_settings().any(|i| {
-            i.interface_number() == 0
-                && i.alternate_setting() == 0
-                && i.class() == 7
-                && i.subclass() == 1
-                && i.protocol() == 2
-        });
-        if !matches_profile {
-            return Err(AppError::unsupported(
-                "Unexpected SR-MK2 USB interface configuration",
-            ));
-        }
+        let (resolved_device_id, device) = crate::sr_mk2::open_usb(
+            device_id,
+            false,
+            "Status query is restricted to SR-MK2 USB 0d8a:0103",
+            connection_error,
+        )
+        .await?;
         let bytes = device
-            .control_in(
-                ControlIn {
-                    control_type: ControlType::Vendor,
-                    recipient: Recipient::Interface,
-                    request: 1,
-                    value: 0,
-                    index: 0,
-                    length: 22,
-                },
-                Duration::from_secs(1),
-            )
+            .control_in(crate::sr_mk2::status_control_in(), Duration::from_secs(1))
             .into_future()
             .await
             .map_err(connection_error)?;

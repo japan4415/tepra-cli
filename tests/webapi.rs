@@ -22,6 +22,16 @@ async fn server_with_override(
     complete: bool,
     override_response: Option<(&'static str, &'static str)>,
 ) -> (String, Arc<Mutex<Vec<(String, String)>>>) {
+    server_with_options(tape, disconnect, complete, override_response, None).await
+}
+
+async fn server_with_options(
+    tape: i64,
+    disconnect: bool,
+    complete: bool,
+    override_response: Option<(&'static str, &'static str)>,
+    delay: Option<(&'static str, Duration)>,
+) -> (String, Arc<Mutex<Vec<(String, String)>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let requests = Arc::new(Mutex::new(Vec::new()));
@@ -68,6 +78,11 @@ async fn server_with_override(
                 }
                 let body = String::from_utf8_lossy(&buf[header_end..]).to_string();
                 captured.lock().unwrap().push((line.clone(), body));
+                if let Some((pattern, duration)) = delay
+                    && line.contains(pattern)
+                {
+                    tokio::time::sleep(duration).await;
+                }
                 if line.starts_with("POST") && disconnect {
                     return;
                 }
@@ -302,4 +317,79 @@ async fn rejects_oversized_response() {
         .await
         .unwrap_err();
     assert_eq!(error.exit_code, 6);
+}
+
+#[tokio::test]
+async fn print_submission_is_not_capped_by_preflight_timeout() {
+    let (endpoint, _) = server_with_options(
+        263,
+        false,
+        true,
+        None,
+        Some(("POST /api/printer/print/", Duration::from_millis(150))),
+    )
+    .await;
+    let api = WebApi::with_endpoint(&endpoint)
+        .unwrap()
+        .with_preflight_timeout(Duration::from_millis(50));
+    let result = api
+        .print("名前 / #", b"png bytes", "local-id", Duration::from_secs(2))
+        .await
+        .unwrap();
+    assert_eq!(result["state"], "completed");
+}
+
+#[tokio::test]
+async fn preflight_timeout_and_mismatch_report_not_submitted() {
+    let (endpoint, requests) = server_with_options(
+        263,
+        false,
+        true,
+        None,
+        Some(("/info/", Duration::from_millis(150))),
+    )
+    .await;
+    let api = WebApi::with_endpoint(&endpoint)
+        .unwrap()
+        .with_preflight_timeout(Duration::from_millis(50));
+    let error = api
+        .print("名前 / #", b"png bytes", "local-id", Duration::from_secs(2))
+        .await
+        .unwrap_err();
+    assert_eq!(error.exit_code, 4);
+    let context = error.context.unwrap();
+    assert_eq!(context["state"], "not_submitted");
+    assert_eq!(context["transmission_started"], false);
+    assert!(
+        !requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(line, _)| line.starts_with("POST"))
+    );
+
+    let (endpoint, _) = server(262, false, true).await;
+    let mismatch = WebApi::with_endpoint(&endpoint)
+        .unwrap()
+        .print("名前 / #", b"png", "id", Duration::from_secs(1))
+        .await
+        .unwrap_err();
+    assert_eq!(mismatch.exit_code, 5);
+    let context = mismatch.context.unwrap();
+    assert_eq!(context["state"], "not_submitted");
+    assert_eq!(context["transmission_started"], false);
+}
+
+#[tokio::test]
+async fn webapi_errcode_is_preserved_in_error_diagnostics() {
+    let (endpoint, _) =
+        server_with_override(263, false, true, Some(("/info/", r#"{"errcode":12}"#))).await;
+    let error = WebApi::with_endpoint(&endpoint)
+        .unwrap()
+        .status("名前 / #")
+        .await
+        .unwrap_err();
+    assert_eq!(error.exit_code, 6);
+    assert!(error.message.contains("12"));
+    assert_eq!(error.context.unwrap()["errcode"], 12);
 }

@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use std::{
     io::{self, Write},
     path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 use tepra_cli::{
@@ -117,8 +118,7 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     let json_requested = std::env::args_os().any(|a| a == "--json");
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
@@ -140,7 +140,7 @@ async fn main() {
             std::process::exit(2);
         }
     };
-    let result = run(cli.command).await;
+    let result = run(cli.command);
     match result {
         Ok(value) => {
             let response = json!({"schema_version":1,"ok":true,"result":value});
@@ -156,20 +156,32 @@ async fn main() {
     }
 }
 
-async fn run(command: Commands) -> Result<Value> {
+fn block_on_current_thread<F: std::future::Future<Output = Result<Value>>>(
+    future: F,
+) -> Result<Value> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| AppError::new("runtime_error", format!("Failed to start runtime: {e}"), 4))?;
+    runtime.block_on(future)
+}
+
+fn run(command: Commands) -> Result<Value> {
     match command {
         Commands::Devices {
             backend,
             transport,
             scan_seconds,
-        } => match backend {
-            Backend::Direct => discovery::devices(transport.as_str(), scan_seconds).await,
-            Backend::WindowsWebapi => WebApi::new()?.devices().await,
-        },
+        } => block_on_current_thread(async move {
+            match backend {
+                Backend::Direct => discovery::devices(transport.as_str(), scan_seconds).await,
+                Backend::WindowsWebapi => WebApi::new()?.devices().await,
+            }
+        }),
         Commands::Doctor {
             device,
             scan_seconds,
-        } => discovery::doctor(&device, scan_seconds).await,
+        } => block_on_current_thread(async move { discovery::doctor(&device, scan_seconds).await }),
         Commands::Render {
             input,
             model,
@@ -202,10 +214,12 @@ async fn run(command: Commands) -> Result<Value> {
                 json!({"state":"rendered", "job_path":job, "preview_path":output, "job":saved, "total_label_length_mm":null}),
             )
         }
-        Commands::Status { device, backend } => match backend {
-            Backend::Direct => tepra_cli::usb_status::status(&device).await,
-            Backend::WindowsWebapi => WebApi::new()?.status(&device).await,
-        },
+        Commands::Status { device, backend } => block_on_current_thread(async move {
+            match backend {
+                Backend::Direct => tepra_cli::usb_status::status(&device).await,
+                Backend::WindowsWebapi => WebApi::new()?.status(&device).await,
+            }
+        }),
         Commands::Print {
             job: path,
             device,
@@ -238,7 +252,10 @@ async fn run(command: Commands) -> Result<Value> {
                 ));
             }
             if experimental_usb {
-                tepra_cli::native_usb::validate(&validated.png_bytes)?;
+                tepra_cli::native_usb::validate_dimensions(
+                    validated.job.raster.width,
+                    validated.job.raster.height,
+                )?;
             }
             if dry_run {
                 return Ok(
@@ -252,33 +269,51 @@ async fn run(command: Commands) -> Result<Value> {
             }
             let mut session = PrintSession::begin(&state_directory()?, &job_id, &device)?;
             session.append(&json!({"event":"print_options","copies_requested":copies,"timeout_seconds":timeout_seconds}))?;
-            let usb_progress = tepra_cli::native_usb::PrintProgress::default();
-            let print = async {
-                match backend {
-                    Backend::Direct => {
-                        tepra_cli::native_usb::print_copies_with_progress(
-                            &device,
-                            &validated.png_bytes,
-                            &job_id,
-                            Duration::from_secs(timeout_seconds),
-                            copies,
-                            usb_progress.clone(),
-                        )
-                        .await
-                    }
-                    Backend::WindowsWebapi => {
-                        WebApi::new()?
-                            .print(
+            let result = block_on_current_thread(async {
+                let usb_progress = tepra_cli::native_usb::PrintProgress::default();
+                let webapi_submitted = AtomicBool::new(false);
+                let print = async {
+                    match backend {
+                        Backend::Direct => {
+                            tepra_cli::native_usb::print_raster_copies_with_progress(
                                 &device,
-                                &validated.png_bytes,
+                                validated.job.raster.width,
+                                validated.raster_pixels,
                                 &job_id,
                                 Duration::from_secs(timeout_seconds),
+                                copies,
+                                usb_progress.clone(),
                             )
                             .await
+                        }
+                        Backend::WindowsWebapi => {
+                            WebApi::new()
+                                .map_err(|e| {
+                                    e.with_context(json!({
+                                        "state": "not_submitted",
+                                        "transmission_started": false,
+                                    }))
+                                })?
+                                .print_with_submission_flag(
+                                    &device,
+                                    &validated.png_bytes,
+                                    &job_id,
+                                    Duration::from_secs(timeout_seconds),
+                                    &webapi_submitted,
+                                )
+                                .await
+                        }
                     }
-                }
-            };
-            let result = await_print(print, tokio::signal::ctrl_c(), backend, &usb_progress).await;
+                };
+                await_print(
+                    print,
+                    tokio::signal::ctrl_c(),
+                    backend,
+                    &usb_progress,
+                    &webapi_submitted,
+                )
+                .await
+            });
             finish_attempt(&mut session, &job_id, &device, result)
         }
     }
@@ -289,16 +324,21 @@ async fn await_print(
     cancel: impl std::future::Future<Output = io::Result<()>>,
     backend: Backend,
     progress: &tepra_cli::native_usb::PrintProgress,
+    webapi_submitted: &AtomicBool,
 ) -> Result<Value> {
     // Check an already-delivered interrupt before polling a future that can
-    // submit a USB transfer. If completion races cancellation, be conservative.
+    // submit a USB transfer or HTTP POST. If completion races cancellation, be conservative.
     tokio::select! {
         biased;
         signal = cancel => {
             let mut error = if matches!(backend, Backend::Direct) {
                 progress.interrupted()
+            } else if webapi_submitted.load(Ordering::Acquire) {
+                AppError::unknown("Interrupted after submission; printer may still be printing. Do not automatically retry.")
+                    .with_context(json!({"transmission_started": true}))
             } else {
-                AppError::unknown("Interrupted; printer may still be printing. Do not automatically retry.")
+                AppError::new("print_interrupted", "Print interrupted before submission", 4)
+                    .with_context(json!({"state": "not_submitted", "transmission_started": false}))
             };
             if let Err(signal_error) = signal {
                 error.message = format!("Interrupt handler failed: {signal_error}. {}", error.message);
@@ -396,17 +436,49 @@ mod tests {
             Ok(json!({"state":"completed"}))
         };
         let progress = tepra_cli::native_usb::PrintProgress::default();
+        let webapi_submitted = AtomicBool::new(false);
         let error = await_print(
             print,
             std::future::ready(Ok(())),
             Backend::Direct,
             &progress,
+            &webapi_submitted,
         )
         .await
         .unwrap_err();
         assert!(!submitted.get());
         assert_eq!(error.exit_code, 4);
         assert_eq!(error_state(&error), "not_submitted");
+    }
+
+    #[tokio::test]
+    async fn webapi_interrupt_distinguishes_before_and_after_submission() {
+        let progress = tepra_cli::native_usb::PrintProgress::default();
+        let webapi_submitted = AtomicBool::new(false);
+        let before = await_print(
+            std::future::pending::<Result<Value>>(),
+            std::future::ready(Ok(())),
+            Backend::WindowsWebapi,
+            &progress,
+            &webapi_submitted,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(before.exit_code, 4);
+        assert_eq!(error_state(&before), "not_submitted");
+
+        webapi_submitted.store(true, Ordering::Release);
+        let after = await_print(
+            std::future::pending::<Result<Value>>(),
+            std::future::ready(Ok(())),
+            Backend::WindowsWebapi,
+            &progress,
+            &webapi_submitted,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(after.exit_code, 7);
+        assert_eq!(error_state(&after), "unknown");
     }
 
     #[tokio::test]
@@ -435,7 +507,8 @@ mod tests {
             }
         });
         let progress = tepra_cli::native_usb::PrintProgress::default();
-        let error = await_print(print, cancel, Backend::Direct, &progress)
+        let webapi_submitted = AtomicBool::new(false);
+        let error = await_print(print, cancel, Backend::Direct, &progress, &webapi_submitted)
             .await
             .unwrap_err();
         assert!(started.get());

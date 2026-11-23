@@ -1,20 +1,35 @@
 //! Experimental SR-MK2 USB protocol. Restricted to the observed 24 mm profile.
-use crate::error::{AppError, Result};
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+use crate::sr_mk2::{OBSERVED_24MM_CARTRIDGE_PROFILE, STATUS_LEN};
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+use crate::sr_mk2::{OBSERVED_24MM_TAPE_CODE, PAGE_MARGIN_DOTS};
+use crate::{
+    error::{AppError, Result},
+    render::HEAD_DOTS,
+    sr_mk2::{DecodedRaster, decode_binary_raster},
+};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 const MAX_LENGTH: u32 = 1417;
-const HEAD: u32 = 256;
-const EXPECTED_TAPE_CODE: Option<u8> = Some(5);
-// TEPRA LINK 2 image-data API default: truncate(360 * 1 / 25.4), in dots.
-// Physical leading/trailing feed is not implied by this parameter alone.
-const PAGE_MARGIN: Option<u16> = Some(14);
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+const HEAD: u32 = HEAD_DOTS;
 pub const MAX_COPIES: u32 = 20;
 
 pub fn validate_copies(copies: u32) -> Result<()> {
     if !(1..=MAX_COPIES).contains(&copies) {
         return Err(AppError::invalid("USB copies must be between 1 and 20"));
+    }
+    Ok(())
+}
+
+/// Validate dimensions of an already-decoded binary raster against the USB profile.
+pub fn validate_dimensions(width: u32, height: u32) -> Result<()> {
+    if width == 0 || width > MAX_LENGTH || height != HEAD_DOTS {
+        return Err(AppError::invalid(
+            "unsupported raster dimensions or PNG format",
+        ));
     }
     Ok(())
 }
@@ -151,6 +166,10 @@ impl PrintProgress {
         self.access(|d| d.resolved_device_id = Some(id));
     }
     #[cfg(any(target_os = "macos", target_os = "linux", test))]
+    fn resolved_device_id(&self) -> Option<String> {
+        self.access(|d| d.resolved_device_id.clone())
+    }
+    #[cfg(any(target_os = "macos", target_os = "linux", test))]
     fn timeout_error(&self) -> AppError {
         self.access(|d| {
             if d.transmission_started {
@@ -164,61 +183,17 @@ impl PrintProgress {
     }
 }
 
-#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
-struct Raster {
-    width: u32,
-    pixels: Vec<u8>,
-}
+type Raster = DecodedRaster;
+
 fn decode(png: &[u8]) -> Result<Raster> {
-    if png.len() > crate::render::MAX_FILE_BYTES as usize {
-        return Err(AppError::invalid("raster PNG exceeds size limit"));
-    }
-    let decoder = png::Decoder::new(std::io::BufReader::new(std::io::Cursor::new(png)));
-    let mut reader = decoder
-        .read_info()
-        .map_err(|e| AppError::invalid(format!("invalid raster PNG: {e}")))?;
-    let info = reader.info();
-    let width = info.width;
-    if width == 0
-        || width > MAX_LENGTH
-        || info.height != HEAD
-        || info.color_type != png::ColorType::Grayscale
-        || info.bit_depth != png::BitDepth::Eight
-        || info.trns.is_some()
-        || info.animation_control.is_some()
-        || info.frame_control.is_some()
-        || !matches!(
-            info.pixel_dims,
-            Some(png::PixelDimensions {
-                xppu: 14173,
-                yppu: 14173,
-                unit: png::Unit::Meter
-            })
-        )
-    {
-        return Err(AppError::invalid(
-            "unsupported raster dimensions or PNG format",
-        ));
-    }
-    let size = reader
-        .output_buffer_size()
-        .ok_or_else(|| AppError::invalid("invalid raster buffer"))?;
-    if size != (width * HEAD) as usize {
-        return Err(AppError::invalid("invalid raster buffer size"));
-    }
-    let mut pixels = vec![0; size];
-    reader
-        .next_frame(&mut pixels)
-        .map_err(|e| AppError::invalid(format!("invalid raster PNG: {e}")))?;
-    if pixels.iter().any(|&p| p != 0 && p != 255) {
-        return Err(AppError::invalid("raster is not binary"));
-    }
-    Ok(Raster { width, pixels })
+    decode_binary_raster(png, None, Some(MAX_LENGTH))
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn command(op: u8, data: &[u8]) -> Vec<u8> {
-    let mut out = vec![0x1b, 0x7b, (data.len() + 3) as u8, op];
+    debug_assert!(data.len() + 3 <= usize::from(u8::MAX));
+    let mut out = Vec::with_capacity(data.len() + 6);
+    out.extend_from_slice(&[0x1b, 0x7b, (data.len() + 3) as u8, op]);
     out.extend_from_slice(data);
     out.push(data.iter().fold(op, |sum, b| sum.wrapping_add(*b)));
     out.push(0x7d);
@@ -268,6 +243,32 @@ fn rows(r: &Raster, start: u32, end: u32) -> Vec<u8> {
     }
     out
 }
+#[cfg(any(target_os = "macos", target_os = "linux", test))]
+fn validate_runtime_status(data: &[u8]) -> Result<u8> {
+    if data.len() != STATUS_LEN || data[0] != STATUS_LEN as u8 {
+        return Err(AppError::unknown(
+            "Unexpected status after transmission; physical result may be partial",
+        ));
+    }
+    if data[2] != 0 {
+        return Err(AppError::new(
+            "device_error",
+            format!(
+                "Printer reported error {} ({}); physical result may be partial",
+                data[2],
+                crate::usb_status::error_name(data[2])
+            ),
+            5,
+        ));
+    }
+    match data[1] {
+        0..=5 => Ok(data[1]),
+        _ => Err(AppError::unknown(
+            "Unexpected printer state; physical result may be partial",
+        )),
+    }
+}
+
 #[derive(Default)]
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 struct CompletionState {
@@ -278,46 +279,29 @@ struct CompletionState {
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 impl CompletionState {
     fn observe(&mut self, data: &[u8]) -> Result<bool> {
-        if data.len() != 22 || data[0] != 22 {
-            return Err(AppError::unknown(
-                "Unexpected status after transmission; physical result may be partial",
-            ));
-        }
-        if data[2] != 0 {
-            return Err(AppError::new(
-                "device_error",
-                format!(
-                    "Printer reported error {} ({}); physical result may be partial",
-                    data[2],
-                    crate::usb_status::error_name(data[2])
-                ),
-                5,
-            ));
-        }
-        if self.transitions.last() != Some(&data[1]) {
+        let st = validate_runtime_status(data)?;
+        if self.transitions.last() != Some(&st) {
             if self.transitions.len() < 16 {
-                self.transitions.push(data[1]);
+                self.transitions.push(st);
             } else {
                 self.transitions_truncated = true;
             }
         }
-        match data[1] {
+        match st {
             1 | 2 => {
                 self.busy_seen = true;
                 Ok(false)
             }
             3..=5 => Ok(false),
             0 => Ok(self.busy_seen),
-            _ => Err(AppError::unknown(
-                "Unexpected printer state; physical result may be partial",
-            )),
+            _ => unreachable!("validate_runtime_status only permits 0..=5"),
         }
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux", test))]
 fn validate_preflight(data: &[u8], tape: u8) -> Result<()> {
-    if data.len() != 22 || data[0] != 22 {
+    if data.len() != STATUS_LEN || data[0] != STATUS_LEN as u8 {
         return Err(AppError::unsupported("Unexpected SR-MK2 status"));
     }
     if data[2] != 0 {
@@ -344,7 +328,7 @@ fn validate_preflight(data: &[u8], tape: u8) -> Result<()> {
     if data[6] != tape {
         return Err(AppError::new("tape_mismatch", "Expected 24 mm tape", 5));
     }
-    if data[7] != 0 || data[8] != 5 || data[9] != 0 || data[10] != 0 || data[11] != 1 {
+    if data[7..12] != OBSERVED_24MM_CARTRIDGE_PROFILE[1..] {
         return Err(AppError::unsupported(
             "Tape does not match the observed 24 mm cartridge profile",
         ));
@@ -377,11 +361,44 @@ pub async fn print_copies_with_progress(
     progress.access(|d| d.copies_requested = Some(copies));
     validate_copies(copies).map_err(|e| progress.attach(e))?;
     let raster = decode(png).map_err(|e| progress.attach(e))?;
-    let (Some(tape), Some(margin)) = (EXPECTED_TAPE_CODE, PAGE_MARGIN) else {
-        return Err(progress.attach(AppError::unsupported(
-            "Experimental USB printing is disabled until the 24 mm tape code and page margin are verified",
-        )));
-    };
+    print_decoded_copies_with_progress(device_id, raster, job_id, timeout, copies, progress).await
+}
+
+/// Print an already-validated 256-dot binary raster without re-decoding its PNG.
+pub async fn print_raster_copies_with_progress(
+    device_id: &str,
+    width: u32,
+    pixels: Vec<u8>,
+    job_id: &str,
+    timeout: Duration,
+    copies: u32,
+    progress: PrintProgress,
+) -> Result<Value> {
+    progress.access(|d| d.copies_requested = Some(copies));
+    validate_copies(copies).map_err(|e| progress.attach(e))?;
+    validate_dimensions(width, HEAD_DOTS).map_err(|e| progress.attach(e))?;
+    if pixels.len() != (width * HEAD_DOTS) as usize || pixels.iter().any(|&v| v != 0 && v != 255) {
+        return Err(progress.attach(AppError::invalid("invalid binary raster buffer")));
+    }
+    print_decoded_copies_with_progress(
+        device_id,
+        Raster { width, pixels },
+        job_id,
+        timeout,
+        copies,
+        progress,
+    )
+    .await
+}
+
+async fn print_decoded_copies_with_progress(
+    device_id: &str,
+    raster: Raster,
+    job_id: &str,
+    timeout: Duration,
+    copies: u32,
+    progress: PrintProgress,
+) -> Result<Value> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         usb_print(
@@ -389,15 +406,18 @@ pub async fn print_copies_with_progress(
             &raster,
             job_id,
             timeout,
-            tape,
-            PrintSettings { margin, copies },
+            OBSERVED_24MM_TAPE_CODE,
+            PrintSettings {
+                margin: PAGE_MARGIN_DOTS,
+                copies,
+            },
             progress,
         )
         .await
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     {
-        let _ = (device_id, raster, job_id, timeout, tape, margin, copies);
+        let _ = (device_id, raster, job_id, timeout, copies);
         Err(progress.attach(AppError::unsupported(
             "USB printing is supported on macOS/Linux only",
         )))
@@ -414,76 +434,34 @@ async fn usb_print(
     settings: PrintSettings,
     progress: PrintProgress,
 ) -> Result<Value> {
-    use nusb::{
-        descriptors::TransferType,
-        transfer::{Bulk, ControlIn, ControlType, Out, Recipient},
-    };
+    use nusb::transfer::{Bulk, Out};
     use std::future::IntoFuture;
     let deadline = tokio::time::Instant::now() + timeout;
     let unavailable = |e: String| AppError::new("device_unavailable", e, 4);
     let preflight = async {
-        let devices: Vec<_> = nusb::list_devices()
+        let (resolved_device_id, device) = crate::sr_mk2::open_usb(
+            device_id,
+            true,
+            "Expected SR-MK2 USB 0d8a:0103",
+            unavailable,
+        )
+        .await?;
+        progress.set_resolved_device_id(resolved_device_id);
+        let interface = device
+            .detach_and_claim_interface(crate::sr_mk2::INTERFACE_NUMBER)
             .await
-            .map_err(|e| unavailable(e.to_string()))?
-            .collect();
-        let info = crate::discovery::resolve_usb_device(device_id, &devices)?;
-        progress.set_resolved_device_id(format!("usb:{}:{}", info.bus_id(), info.device_address()));
-        if info.vendor_id() != 0x0d8a || info.product_id() != 0x0103 {
-            return Err(AppError::new(
-                "printer_mismatch",
-                "Expected SR-MK2 USB 0d8a:0103",
-                3,
-            ));
-        }
-        let device = info.open().await.map_err(|e| unavailable(e.to_string()))?;
-        let config = device
-            .active_configuration()
             .map_err(|e| unavailable(e.to_string()))?;
-        if config.configuration_value() != 1
-            || !config.interface_alt_settings().any(|i| {
-                i.interface_number() == 0
-                    && i.alternate_setting() == 0
-                    && i.class() == 7
-                    && i.subclass() == 1
-                    && i.protocol() == 2
-                    && [0x81, 0x02].iter().all(|addr| {
-                        i.endpoints().any(|e| {
-                            e.address() == *addr
-                                && e.transfer_type() == TransferType::Bulk
-                                && e.max_packet_size() == 64
-                        })
-                    })
-            })
-        {
-            return Err(AppError::unsupported(
-                "Unexpected SR-MK2 USB interface configuration",
-            ));
-        }
-        let data = device
-            .control_in(
-                ControlIn {
-                    control_type: ControlType::Vendor,
-                    recipient: Recipient::Interface,
-                    request: 1,
-                    value: 0,
-                    index: 0,
-                    length: 22,
-                },
-                Duration::from_secs(1),
-            )
+        let data = interface
+            .control_in(crate::sr_mk2::status_control_in(), Duration::from_secs(1))
             .into_future()
             .await
             .map_err(|e| unavailable(e.to_string()))?;
         progress.record(&data);
         validate_preflight(&data, tape)?;
-        let interface = device
-            .claim_interface(0)
-            .await
-            .map_err(|e| unavailable(e.to_string()))?;
-        Ok((device, interface))
+        Ok(interface)
     };
     let preflight_result = tokio::time::timeout_at(deadline, preflight).await;
-    let (device, interface) = preflight_result
+    let interface = preflight_result
         .map_err(|_| {
             progress.attach(AppError::new(
                 "device_timeout",
@@ -493,9 +471,9 @@ async fn usb_print(
         })?
         .map_err(|e| progress.attach(e))?;
     let ep = interface
-        .endpoint::<Bulk, Out>(0x02)
+        .endpoint::<Bulk, Out>(crate::sr_mk2::BULK_OUT_ENDPOINT)
         .map_err(|e| progress.attach(unavailable(e.to_string())))?;
-    let mut transport = UsbTransport { device, ep };
+    let mut transport = UsbTransport { interface, ep };
     execute_job(
         &mut transport,
         raster,
@@ -555,7 +533,7 @@ async fn execute_job<T: Transport>(
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 struct UsbTransport {
-    device: nusb::Device,
+    interface: nusb::Interface,
     ep: nusb::Endpoint<nusb::transfer::Bulk, nusb::transfer::Out>,
 }
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -574,20 +552,9 @@ impl Transport for UsbTransport {
         check_transfer(len, completion.actual_len, completion.status.is_ok())
     }
     async fn status(&mut self) -> Result<Vec<u8>> {
-        use nusb::transfer::{ControlIn, ControlType, Recipient};
         use std::future::IntoFuture;
-        self.device
-            .control_in(
-                ControlIn {
-                    control_type: ControlType::Vendor,
-                    recipient: Recipient::Interface,
-                    request: 1,
-                    value: 0,
-                    index: 0,
-                    length: 22,
-                },
-                Duration::from_secs(1),
-            )
+        self.interface
+            .control_in(crate::sr_mk2::status_control_in(), Duration::from_secs(1))
             .into_future()
             .await
             .map_err(|e| {
@@ -608,6 +575,10 @@ async fn run_job<T: Transport>(
     progress: &PrintProgress,
     deadline: tokio::time::Instant,
 ) -> Result<Value> {
+    let raster_chunks: Vec<Vec<u8>> = (0..raster.width)
+        .step_by(1024)
+        .map(|start| rows(raster, start, (start + 1024).min(raster.width)))
+        .collect();
     progress.access(|d| d.current_copy = Some(1));
     progress.phase("header");
     transport
@@ -627,21 +598,15 @@ async fn run_job<T: Transport>(
                 )
                 .await?;
         }
-        for start in (0..raster.width).step_by(1024) {
+        for chunk in &raster_chunks {
             progress.phase("raster");
-            transport
-                .send(
-                    rows(raster, start, (start + 1024).min(raster.width)),
-                    progress,
-                    deadline,
-                )
-                .await?;
+            transport.send(chunk.clone(), progress, deadline).await?;
             let data = transport.status().await?;
             progress.record(&data);
             if tokio::time::Instant::now() >= deadline {
                 return Err(progress.timeout_error());
             }
-            CompletionState::default().observe(&data)?;
+            validate_runtime_status(&data)?;
         }
         progress.phase("form_feed");
         transport.send(vec![0x0c], progress, deadline).await?;
@@ -666,7 +631,7 @@ async fn run_job<T: Transport>(
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     Ok(
-        serde_json::json!({"job_id":job_id, "device_id":device_id, "resolved_device_id":progress.snapshot()["resolved_device_id"], "state":"completed", "copies_requested":settings.copies,"copies_submitted":settings.copies, "completion_evidence":"usb_busy_then_idle", "final_status":{"raw_bytes": final_status}, "observed_st_transitions":state.transitions, "observed_st_transitions_truncated":state.transitions_truncated}),
+        serde_json::json!({"job_id":job_id, "device_id":device_id, "resolved_device_id":progress.resolved_device_id(), "state":"completed", "copies_requested":settings.copies,"copies_submitted":settings.copies, "completion_evidence":"usb_busy_then_idle", "final_status":{"raw_bytes": final_status}, "observed_st_transitions":state.transitions, "observed_st_transitions_truncated":state.transitions_truncated}),
     )
 }
 

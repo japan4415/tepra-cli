@@ -1,9 +1,14 @@
 //! Read-only USB and Bluetooth discovery. No printer commands are sent.
-use crate::error::{AppError, Result};
+use crate::{
+    error::{AppError, Result},
+    sr_mk2::{PRODUCT_ID, VENDOR_ID},
+};
 use btleplug::api::{Central, Manager as _, Peripheral as _, ScanFilter};
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use serde_json::{Value, json};
 use std::{
+    collections::HashMap,
+    fmt::Write as _,
     future::{Future, IntoFuture},
     time::Duration,
 };
@@ -60,15 +65,12 @@ impl<'a> From<&'a nusb::DeviceInfo> for UsbDescriptor<'a> {
 
 fn serial_selector(d: UsbDescriptor<'_>) -> Option<String> {
     let serial = d.serial.filter(|s| !s.is_empty())?;
-    let hex: String = serial
-        .as_bytes()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect();
-    Some(format!(
-        "usb:serial:{:04x}:{:04x}:{hex}",
-        d.vendor, d.product
-    ))
+    let mut out = String::with_capacity("usb:serial:0000:0000:".len() + serial.len() * 2);
+    let _ = write!(out, "usb:serial:{:04x}:{:04x}:", d.vendor, d.product);
+    for b in serial.as_bytes() {
+        let _ = write!(out, "{b:02x}");
+    }
+    Some(out)
 }
 
 fn resolve_usb_index(selector: &str, devices: &[UsbDescriptor<'_>]) -> Result<usize> {
@@ -76,7 +78,7 @@ fn resolve_usb_index(selector: &str, devices: &[UsbDescriptor<'_>]) -> Result<us
         devices
             .iter()
             .enumerate()
-            .filter(|(_, d)| d.vendor == 0x0d8a && d.product == 0x0103)
+            .filter(|(_, d)| d.vendor == VENDOR_ID && d.product == PRODUCT_ID)
             .map(|(i, _)| i)
             .collect()
     } else if let Some(rest) = selector.strip_prefix("usb:serial:") {
@@ -121,17 +123,21 @@ fn resolve_usb_index(selector: &str, devices: &[UsbDescriptor<'_>]) -> Result<us
         let (bus, address) = rest
             .rsplit_once(':')
             .ok_or_else(|| AppError::invalid("Invalid USB selector"))?;
-        if bus.is_empty()
+        let addr = if bus.is_empty()
             || address.is_empty()
+            || (address.len() > 1 && address.starts_with('0'))
             || !address.bytes().all(|b| b.is_ascii_digit())
-            || address.parse::<u8>().is_err()
         {
             return Err(AppError::invalid("Invalid USB selector"));
-        }
+        } else {
+            address
+                .parse::<u8>()
+                .map_err(|_| AppError::invalid("Invalid USB selector"))?
+        };
         devices
             .iter()
             .enumerate()
-            .filter(|(_, d)| usb_id(d.bus, d.address) == selector)
+            .filter(|(_, d)| d.bus == bus && d.address == addr)
             .map(|(i, _)| i)
             .collect()
     };
@@ -144,6 +150,16 @@ fn resolve_usb_index(selector: &str, devices: &[UsbDescriptor<'_>]) -> Result<us
             3,
         )),
     }
+}
+
+fn serial_counts<'a>(devices: &[UsbDescriptor<'a>]) -> HashMap<(u16, u16, &'a str), usize> {
+    let mut counts = HashMap::new();
+    for d in devices {
+        if let Some(serial) = d.serial.filter(|s| !s.is_empty()) {
+            *counts.entry((d.vendor, d.product, serial)).or_insert(0) += 1;
+        }
+    }
+    counts
 }
 
 /// Resolve an explicit USB selector without choosing arbitrarily among matches.
@@ -164,17 +180,18 @@ fn candidate(name: Option<&str>) -> bool {
         n.contains("tepra") || n.contains("sr-mk2") || n.contains("king jim")
     })
 }
-fn usb_info(info: &nusb::DeviceInfo, devices: &[UsbDescriptor<'_>]) -> Value {
+fn usb_info(info: &nusb::DeviceInfo, counts: &HashMap<(u16, u16, &str), usize>) -> Value {
     // Observed on a real SR-MK2, 2026-11-10. This identifies the model,
     // not the correctness of any unverified print protocol.
-    let known_mk2 = info.vendor_id() == 0x0d8a && info.product_id() == 0x0103;
+    let known_mk2 = info.vendor_id() == VENDOR_ID && info.product_id() == PRODUCT_ID;
     let hint = candidate(info.product_string()) || candidate(info.manufacturer_string());
     let id = usb_id(info.bus_id(), info.device_address());
     let serial = serial_selector(info.into());
-    let preferred = serial
-        .as_ref()
-        .filter(|s| resolve_usb_index(s, devices).is_ok())
-        .unwrap_or(&id);
+    let serial_unique = info
+        .serial_number()
+        .filter(|s| !s.is_empty())
+        .is_some_and(|s| counts.get(&(info.vendor_id(), info.product_id(), s)) == Some(&1));
+    let preferred = serial.as_ref().filter(|_| serial_unique).unwrap_or(&id);
     json!({"id": id, "serial_selector":serial, "preferred_selector":preferred, "transport":"usb", "bus_id":info.bus_id(), "device_address":info.device_address(), "vendor_id":info.vendor_id(), "product_id":info.product_id(), "class":info.class(), "subclass":info.subclass(), "protocol":info.protocol(), "manufacturer":info.manufacturer_string(), "product":info.product_string(), "serial_number":info.serial_number(), "candidate":known_mk2 || hint, "name_hint":hint, "model":if known_mk2 {"sr-mk2"} else {"unknown"}, "identification":if known_mk2 {"observed-usb-vid-pid"} else {"unverified"}, "direct_print_supported":known_mk2 && cfg!(any(target_os="macos", target_os="linux")), "requires_experimental_usb_flag":true})
 }
 async fn usb_devices() -> Result<Vec<nusb::DeviceInfo>> {
@@ -186,15 +203,17 @@ async fn usb_devices() -> Result<Vec<nusb::DeviceInfo>> {
 }
 async fn usb_doctor(id: &str) -> Result<Value> {
     let devices = usb_devices().await?;
-    let info = resolve_usb_device(id, &devices)?;
     let descriptors: Vec<_> = devices.iter().map(UsbDescriptor::from).collect();
+    let index = resolve_usb_index(id, &descriptors)?;
+    let info = &devices[index];
+    let counts = serial_counts(&descriptors);
     let device = bounded("USB open", info.open().into_future()).await?;
     let configurations: Vec<Value> = device.configurations().map(|c| json!({
         "configuration_value":c.configuration_value(),
         "interfaces": c.interface_alt_settings().map(|i| json!({"interface_number":i.interface_number(), "alternate_setting":i.alternate_setting(), "class":i.class(), "subclass":i.subclass(), "protocol":i.protocol(), "endpoints":i.endpoints().map(|e| json!({"address":e.address(), "transfer_type":format!("{:?}", e.transfer_type()), "max_packet_size":e.max_packet_size(), "interval":e.interval()})).collect::<Vec<_>>() })).collect::<Vec<_>>()
     })).collect();
     Ok(
-        json!({"device":usb_info(&info, &descriptors), "configurations":configurations, "active_configuration":device.active_configuration().ok().map(|c|c.configuration_value())}),
+        json!({"device":usb_info(info, &counts), "configurations":configurations, "active_configuration":device.active_configuration().ok().map(|c|c.configuration_value())}),
     )
 }
 async fn ble_scan(seconds: u64) -> Result<Vec<(usize, Peripheral)>> {
@@ -248,10 +267,10 @@ async fn ble_scan(seconds: u64) -> Result<Vec<(usize, Peripheral)>> {
 }
 async fn ble_info(adapter: usize, p: &Peripheral) -> Result<Value> {
     let props = bounded("Bluetooth advertising properties", p.properties()).await?;
-    let advertising = props.map(|v| json!({"local_name":v.local_name, "advertisement_name":v.advertisement_name, "appearance":v.appearance, "tx_power_level":v.tx_power_level, "rssi":v.rssi, "manufacturer_data":v.manufacturer_data, "service_data":v.service_data.into_iter().map(|(k,v)| (k.to_string(),v)).collect::<std::collections::BTreeMap<_,_>>(), "services":v.services.iter().map(ToString::to_string).collect::<Vec<_>>(), "class":v.class}));
-    let hint = advertising.as_ref().is_some_and(|a| {
-        candidate(a["local_name"].as_str()) || candidate(a["advertisement_name"].as_str())
+    let hint = props.as_ref().is_some_and(|v| {
+        candidate(v.local_name.as_deref()) || candidate(v.advertisement_name.as_deref())
     });
+    let advertising = props.map(|v| json!({"local_name":v.local_name, "advertisement_name":v.advertisement_name, "appearance":v.appearance, "tx_power_level":v.tx_power_level, "rssi":v.rssi, "manufacturer_data":v.manufacturer_data, "service_data":v.service_data.into_iter().map(|(k,v)| (k.to_string(),v)).collect::<std::collections::BTreeMap<_,_>>(), "services":v.services.iter().map(ToString::to_string).collect::<Vec<_>>(), "class":v.class}));
     Ok(
         json!({"id":ble_id(adapter, &p.id().to_string()), "transport":"ble", "advertising":advertising, "candidate":hint, "name_hint":hint, "model":"unknown", "identification":"unverified", "direct_print_supported":false}),
     )
@@ -284,16 +303,39 @@ pub async fn devices(transport: &str, scan_seconds: u64) -> Result<Value> {
         "usb" => {
             let devices = usb_devices().await?;
             let descriptors: Vec<_> = devices.iter().map(UsbDescriptor::from).collect();
-            Ok(
-                json!({"devices":devices.iter().map(|d| usb_info(d, &descriptors)).collect::<Vec<_>>() }),
-            )
+            let counts = serial_counts(&descriptors);
+            Ok(json!({"devices":devices.iter().map(|d| usb_info(d, &counts)).collect::<Vec<_>>() }))
         }
         "ble" => {
-            let mut output = Vec::new();
-            for (a, p) in ble_scan(scan_seconds).await? {
-                output.push(ble_info(a, &p).await?);
+            let scanned = ble_scan(scan_seconds).await?;
+            let total = scanned.len();
+            let mut tasks = tokio::task::JoinSet::new();
+            for (index, (adapter, peripheral)) in scanned.into_iter().enumerate() {
+                tasks.spawn(async move {
+                    let entry = match ble_info(adapter, &peripheral).await {
+                        Ok(value) => value,
+                        Err(error) => json!({
+                            "id": ble_id(adapter, &peripheral.id().to_string()),
+                            "transport": "ble",
+                            "advertising": null,
+                            "properties_error": error.message,
+                            "candidate": false,
+                            "name_hint": false,
+                            "model": "unknown",
+                            "identification": "unverified",
+                            "direct_print_supported": false,
+                        }),
+                    };
+                    (index, entry)
+                });
             }
-            Ok(json!({"devices":output}))
+            let mut ordered = vec![Value::Null; total];
+            while let Some(joined) = tasks.join_next().await {
+                let (index, entry) =
+                    joined.map_err(|e| unavailable(format!("Bluetooth enumeration task: {e}")))?;
+                ordered[index] = entry;
+            }
+            Ok(json!({"devices": ordered}))
         }
         _ => Err(AppError::unsupported(format!(
             "Unsupported transport: {transport}"
@@ -371,6 +413,7 @@ mod tests {
             "usb:serial:0d8a:0103:6",
             "usb:serial:0d8a:0103:ff",
             "usb::1",
+            "usb:bus:01",
             "usb:bus:256",
         ] {
             assert_eq!(
@@ -379,6 +422,18 @@ mod tests {
                 "{selector}"
             );
         }
+        assert_eq!(
+            resolve_usb_index("usb:bus:0", &[descriptor("bus", 0, 1, 2, None)]).unwrap(),
+            0
+        );
+        let dup = [
+            descriptor("b1", 1, 0x0d8a, 0x0103, Some("S1")),
+            descriptor("b2", 2, 0x0d8a, 0x0103, Some("S1")),
+            descriptor("b3", 3, 0x0d8a, 0x0103, Some("S2")),
+        ];
+        let counts = serial_counts(&dup);
+        assert_eq!(counts.get(&(0x0d8a, 0x0103, "S1")), Some(&2));
+        assert_eq!(counts.get(&(0x0d8a, 0x0103, "S2")), Some(&1));
     }
     #[test]
     fn ids_preserve_os_identity() {
