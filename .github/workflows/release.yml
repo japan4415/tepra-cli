@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   validate:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     outputs:
       prerelease: ${{ steps.metadata.outputs.prerelease }}
@@ -46,7 +46,7 @@ jobs:
       tag: ${{ github.ref_name }}
   publish:
     needs: [validate, archives]
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:
       contents: write
