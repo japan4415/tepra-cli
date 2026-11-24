@@ -29,7 +29,7 @@ Linuxの配布バイナリはglibc 2.35以降と`libdbus-1.so.3`が必要です�
 
 ### ソースから導入
 
-rustupを用意して、このリポジトリで実行します。`rust-toolchain.toml`でRust 1.98.1を固定しています。
+rustupを用意して、このリポジトリで実行します。`rust-toolchain.toml`でRust 1.100.0を固定しています。
 
 ```sh
 cargo install --path . --locked
