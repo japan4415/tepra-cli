@@ -36,7 +36,7 @@ GitHub画面で先に「Publish release」を押す必要はない。タグのpu
 `Release`ワークフローは次の順で実行する。
 
 1. タグ形式・Cargoのバージョン・mainへの取り込みを確認。
-2. Rust 1.98.1とCargo.lockを使い、5環境でテストとreleaseビルド。
+2. Rust 1.100.0とCargo.lockを使い、5環境でテストとreleaseビルド。
 3. 配布アーカイブを作成し、展開したバイナリの起動とバージョンを確認。
 4. 5ファイルがすべて存在することを確認して`SHA256SUMS`を生成。
 5. アーカイブとチェックサムにGitHub Artifact Attestationsを発行。
