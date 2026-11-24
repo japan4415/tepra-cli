@@ -38,7 +38,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
         with:
-          version: '0.13.7'
+          version: '0.13.9'
           enable-cache: false
       - name: Point example at this release
         run: uv run --no-project --python 3.12 python scripts/aqua_smoke_config.py "$RELEASE_TAG"
