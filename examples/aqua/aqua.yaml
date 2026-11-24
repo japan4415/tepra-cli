@@ -7,8 +7,8 @@ registries:
     type: github_content
     repo_owner: japan4415
     repo_name: tepra-cli
-    ref: v0.1.0
+    ref: v0.1.1
     path: aqua-registry.yaml
 packages:
-  - name: japan4415/tepra-cli@v0.1.0
+  - name: japan4415/tepra-cli@v0.1.1
     registry: tepra

@@ -60,10 +60,10 @@ registries:
     type: github_content
     repo_owner: japan4415
     repo_name: tepra-cli
-    ref: v0.1.0
+    ref: v0.1.1
     path: aqua-registry.yaml
 packages:
-  - name: japan4415/tepra-cli@v0.1.0
+  - name: japan4415/tepra-cli@v0.1.1
     registry: tepra
 ```
 
@@ -74,15 +74,15 @@ packages:
 
 aqua 2.65以降を使う。インストール時にSHA-256を照合し、配布物とチェックサムの両方についてGitHub Actionsの`release.yml`が署名したビルド証明を検証する。aquaは検証用のGitHub CLIを自動導入する。GitHub APIの未認証アクセスはレート制限に当たりやすいため、GitHub CLIの認証またはaquaがサポートする`AQUA_GITHUB_TOKEN` / `GITHUB_TOKEN`を用意する。トークンは設定ファイルへ書かない。
 
-`aqua-checksums.json`は利用側で生成し、レビューしてGit管理する。このリポジトリにもv0.1.0の5環境分を記録する。チェックサムやattestation検証の無効化を解決策にしない。公開直後にAPIの反映待ちで証明が見つからない場合は少し待って再実行する。
+`aqua-checksums.json`は利用側で生成し、レビューしてGit管理する。このリポジトリにもv0.1.1の5環境分を記録する。チェックサムやattestation検証の無効化を解決策にしない。公開直後にAPIの反映待ちで証明が見つからない場合は少し待って再実行する。
 
-公開済みバージョンの導入だけを再検証するには`gh workflow run verify-install.yml --ref main -f tag=v0.1.0`を使う。リリース時と同じ5環境で検証し、バイナリの再公開は行わない。PRでもv0.1.0を使った導入検証を実行するため、ポリシーやチェックサムの初期設定の不備を公開前に検知できる。
+公開済みバージョンの導入だけを再検証するには`gh workflow run verify-install.yml --ref main -f tag=v0.1.1`を使う。リリース時と同じ5環境で検証し、バイナリの再公開は行わない。PRでも`examples/aqua/aqua.yaml`が指す公開バージョンを使った導入検証を実行するため、ポリシーやチェックサムの初期設定の不備を公開前に検知できる。
 
 GitHub CLIで証明を手動確認する例:
 
 ```sh
-gh release download v0.1.0 -R japan4415/tepra-cli -p 'tepra_0.1.0_darwin_arm64.tar.gz'
-gh attestation verify tepra_0.1.0_darwin_arm64.tar.gz \
+gh release download v0.1.1 -R japan4415/tepra-cli -p 'tepra_0.1.1_darwin_arm64.tar.gz'
+gh attestation verify tepra_0.1.1_darwin_arm64.tar.gz \
   --repo japan4415/tepra-cli \
   --signer-workflow japan4415/tepra-cli/.github/workflows/release.yml \
   --deny-self-hosted-runners
