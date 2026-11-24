@@ -13,9 +13,9 @@ macOS + USB + 24mmテープで校正ラベルを印刷し、自動カットとCL
 [GitHub Releases](https://github.com/japan4415/tepra-cli/releases)に、macOS（Intel/Apple Silicon）、Linux（x64/ARM64）、Windows（x64）のビルド済みバイナリを配布します。Rustのインストールは不要です。aqua 2.65以降を用意し、次のように導入できます。
 
 ```sh
-git clone --branch v0.1.0 --depth 1 https://github.com/japan4415/tepra-cli.git
+git clone --branch v0.1.1 --depth 1 https://github.com/japan4415/tepra-cli.git
 cd tepra-cli
-# v0.1.0の設定例をaquaが自動検出するGitルートへ配置
+# v0.1.1の設定例をaquaが自動検出するGitルートへ配置
 cp examples/aqua/aqua-policy.yaml aqua-policy.yaml
 aqua policy allow
 aqua -c examples/aqua/aqua.yaml update-checksum
