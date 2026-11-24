@@ -52,7 +52,13 @@ pub struct Rendered {
     pub options: RenderOptions,
 }
 pub fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    use std::fmt::Write as _;
+    let digest = Sha256::digest(bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for b in digest {
+        let _ = write!(out, "{b:02x}");
+    }
+    out
 }
 pub fn width_for_length(mm: f64) -> Result<u32> {
     if !mm.is_finite() || mm <= 0.0 || mm > 1000.0 {
@@ -291,4 +297,21 @@ pub fn render(input: &Path, options: &RenderOptions) -> Result<Rendered> {
         source_sha256: sha256(&data),
         options: options.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_formats_lowercase_hex() {
+        assert_eq!(
+            sha256(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 }
